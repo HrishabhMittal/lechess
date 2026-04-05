@@ -8,6 +8,22 @@ pub struct Peices {
     queen: u64,
     king: u64,
 }
+pub struct Square {
+    file: u8,
+    rank: u8,
+}
+
+impl Square {
+    pub fn new(file: u8, rank: u8) -> Self {
+        Self { file, rank }
+    }
+    pub fn from(rep: &str) -> Self {
+        Self {
+            file: rep.as_bytes()[0] - b'a',
+            rank: 8 - (rep.as_bytes()[1] - b'0'),
+        }
+    }
+}
 
 impl Peices {
     pub fn new_white() -> Self {
@@ -30,7 +46,9 @@ impl Peices {
             king: 0b00001000 << 56,
         }
     }
-    pub fn find(&self, i: u32, j: u32) -> Option<PeiceType> {
+    pub fn find(&self, sq: &Square) -> Option<PeiceType> {
+        let i = sq.rank;
+        let j = sq.file;
         if i > 7 || j > 7 {
             None
         } else {
@@ -78,16 +96,16 @@ impl Board {
             black: Peices::new_black(),
         }
     }
-    pub fn find(&self, i: u32, j: u32) -> Option<Peice> {
-        match (self.white.find(i, j), self.black.find(i, j)) {
+    pub fn find(&self, sq: Square) -> Option<Peice> {
+        match (self.white.find(&sq), self.black.find(&sq)) {
             (Some(p), None) => Some(Peice::White(p)),
             (None, Some(p)) => Some(Peice::Black(p)),
             _ => None,
         }
     }
-    pub fn get_display(&self, i: u32, j: u32) -> u8 {
+    pub fn get_display(&self, sq: Square) -> u8 {
         let (capital, init, ch);
-        match self.find(i, j) {
+        match self.find(sq) {
             Some(v) => match v {
                 Peice::White(w) => {
                     capital = false;
@@ -127,9 +145,9 @@ impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "  a b c d e f g h")?;
         for i in 0..8 {
-            write!(f, "{} ", 8 - i)?;
+            write!(f, "{}", 8 - i)?;
             for j in 0..8 {
-                write!(f, "{} ", self.get_display(i, j) as char)?;
+                write!(f, " {}", self.get_display(Square::new(j, i)) as char)?;
             }
             writeln!(f, "")?;
         }
