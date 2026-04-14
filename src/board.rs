@@ -32,26 +32,6 @@ pub struct Pieces {
     pub king: u64,
 }
 impl Pieces {
-    pub fn new_white() -> Self {
-        Pieces {
-            pawn: 0x0000_0000_0000_FF00,
-            knight: 0x0000_0000_0000_0042,
-            bishop: 0x0000_0000_0000_0024,
-            rook: 0x0000_0000_0000_0081,
-            queen: 0x0000_0000_0000_0008,
-            king: 0x0000_0000_0000_0010,
-        }
-    }
-    pub fn new_black() -> Self {
-        Pieces {
-            pawn: 0x00FF_0000_0000_0000,
-            knight: 0x4200_0000_0000_0000,
-            bishop: 0x2400_0000_0000_0000,
-            rook: 0x8100_0000_0000_0000,
-            queen: 0x0800_0000_0000_0000,
-            king: 0x1000_0000_0000_0000,
-        }
-    }
     pub fn all(&self) -> u64 {
         self.pawn | self.knight | self.bishop | self.rook | self.queen | self.king
     }
@@ -62,15 +42,172 @@ pub struct Board {
     pub black: Pieces,
     pub en_passant_target: Option<u8>,
     pub castling_rights: u8,
+    pub white_to_move: bool,
+    pub halfmove_clock: u16,
+    pub fullmove_number: u16,
 }
 impl Board {
     pub fn new() -> Self {
-        Board {
-            white: Pieces::new_white(),
-            black: Pieces::new_black(),
-            en_passant_target: None,
-            castling_rights: 0b1111,
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap()
+    }
+    pub fn from_fen(fen: &str) -> Result<Self, &'static str> {
+        let parts: Vec<&str> = fen.split_whitespace().collect();
+        if parts.len() < 4 {
+            return Err("Invalid FEN string");
         }
+        let mut board = Board {
+            white: Pieces {
+                pawn: 0,
+                knight: 0,
+                bishop: 0,
+                rook: 0,
+                queen: 0,
+                king: 0,
+            },
+            black: Pieces {
+                pawn: 0,
+                knight: 0,
+                bishop: 0,
+                rook: 0,
+                queen: 0,
+                king: 0,
+            },
+            en_passant_target: None,
+            castling_rights: 0,
+            white_to_move: parts[1] == "w",
+            halfmove_clock: parts.get(4).unwrap_or(&"0").parse().unwrap_or(0),
+            fullmove_number: parts.get(5).unwrap_or(&"1").parse().unwrap_or(1),
+        };
+        let mut rank = 7i32;
+        let mut file = 0i32;
+        for c in parts[0].chars() {
+            if c == '/' {
+                rank -= 1;
+                file = 0;
+            } else if c.is_digit(10) {
+                file += c.to_digit(10).unwrap() as i32;
+            } else {
+                let sq = (rank * 8 + file) as u8;
+                let bb = 1u64 << sq;
+                match c {
+                    'P' => board.white.pawn |= bb,
+                    'N' => board.white.knight |= bb,
+                    'B' => board.white.bishop |= bb,
+                    'R' => board.white.rook |= bb,
+                    'Q' => board.white.queen |= bb,
+                    'K' => board.white.king |= bb,
+                    'p' => board.black.pawn |= bb,
+                    'n' => board.black.knight |= bb,
+                    'b' => board.black.bishop |= bb,
+                    'r' => board.black.rook |= bb,
+                    'q' => board.black.queen |= bb,
+                    'k' => board.black.king |= bb,
+                    _ => return Err("Invalid piece character in FEN"),
+                }
+                file += 1;
+            }
+        }
+        for c in parts[2].chars() {
+            match c {
+                'K' => board.castling_rights |= 1,
+                'Q' => board.castling_rights |= 2,
+                'k' => board.castling_rights |= 4,
+                'q' => board.castling_rights |= 8,
+                '-' => break,
+                _ => {}
+            }
+        }
+        if parts[3] != "-" && parts[3].len() >= 2 {
+            let f = parts[3].chars().nth(0).unwrap() as u8 - b'a';
+            let r = parts[3].chars().nth(1).unwrap() as u8 - b'1';
+            board.en_passant_target = Some(r * 8 + f);
+        }
+        Ok(board)
+    }
+    pub fn to_fen(&self) -> String {
+        let mut fen = String::new();
+        for rank in (0..8).rev() {
+            let mut empty = 0;
+            for file in 0..8 {
+                let sq = rank * 8 + file;
+                let bb = 1u64 << sq;
+                let c = if (self.white.pawn & bb) != 0 {
+                    'P'
+                } else if (self.black.pawn & bb) != 0 {
+                    'p'
+                } else if (self.white.knight & bb) != 0 {
+                    'N'
+                } else if (self.black.knight & bb) != 0 {
+                    'n'
+                } else if (self.white.bishop & bb) != 0 {
+                    'B'
+                } else if (self.black.bishop & bb) != 0 {
+                    'b'
+                } else if (self.white.rook & bb) != 0 {
+                    'R'
+                } else if (self.black.rook & bb) != 0 {
+                    'r'
+                } else if (self.white.queen & bb) != 0 {
+                    'Q'
+                } else if (self.black.queen & bb) != 0 {
+                    'q'
+                } else if (self.white.king & bb) != 0 {
+                    'K'
+                } else if (self.black.king & bb) != 0 {
+                    'k'
+                } else {
+                    '.'
+                };
+                if c == '.' {
+                    empty += 1;
+                } else {
+                    if empty > 0 {
+                        fen.push_str(&empty.to_string());
+                        empty = 0;
+                    }
+                    fen.push(c);
+                }
+            }
+            if empty > 0 {
+                fen.push_str(&empty.to_string());
+            }
+            if rank > 0 {
+                fen.push('/');
+            }
+        }
+        fen.push(' ');
+        fen.push(if self.white_to_move { 'w' } else { 'b' });
+        fen.push(' ');
+        if self.castling_rights == 0 {
+            fen.push('-');
+        } else {
+            if (self.castling_rights & 1) != 0 {
+                fen.push('K');
+            }
+            if (self.castling_rights & 2) != 0 {
+                fen.push('Q');
+            }
+            if (self.castling_rights & 4) != 0 {
+                fen.push('k');
+            }
+            if (self.castling_rights & 8) != 0 {
+                fen.push('q');
+            }
+        }
+        fen.push(' ');
+        if let Some(sq) = self.en_passant_target {
+            let file = (sq % 8) as u8 + b'a';
+            let rank = (sq / 8) as u8 + b'1';
+            fen.push(file as char);
+            fen.push(rank as char);
+        } else {
+            fen.push('-');
+        }
+        fen.push(' ');
+        fen.push_str(&self.halfmove_clock.to_string());
+        fen.push(' ');
+        fen.push_str(&self.fullmove_number.to_string());
+        fen
     }
     pub fn is_square_attacked(&self, sq: u8, by_white: bool) -> bool {
         let enemy = if by_white { &self.white } else { &self.black };
@@ -114,8 +251,28 @@ impl Board {
         let king_sq = king_bb.trailing_zeros() as u8;
         self.is_square_attacked(king_sq, !is_white)
     }
-    pub fn make_move(&self, m: &Move, is_white: bool) -> Board {
+    pub fn make_move(&self, m: &Move) -> Board {
         let mut next = self.clone();
+        let is_white = self.white_to_move;
+        let is_pawn = if is_white {
+            (self.white.pawn & (1u64 << m.from)) != 0
+        } else {
+            (self.black.pawn & (1u64 << m.from)) != 0
+        };
+        let is_capture = matches!(
+            m.flag,
+            MoveFlag::Capture
+                | MoveFlag::EnPassant
+                | MoveFlag::PromoCaptureKnight
+                | MoveFlag::PromoCaptureBishop
+                | MoveFlag::PromoCaptureRook
+                | MoveFlag::PromoCaptureQueen
+        );
+        if is_pawn || is_capture {
+            next.halfmove_clock = 0;
+        } else {
+            next.halfmove_clock += 1;
+        }
         if m.from == 4 {
             next.castling_rights &= !0b0011;
         }
@@ -194,6 +351,10 @@ impl Board {
         if m.flag == MoveFlag::DoublePawnPush {
             next.en_passant_target = Some(if is_white { m.to - 8 } else { m.to + 8 });
         }
+        next.white_to_move = !is_white;
+        if !is_white {
+            next.fullmove_number += 1;
+        }
         next
     }
     pub fn get_occupancy(&self) -> (u64, u64, u64) {
@@ -201,19 +362,21 @@ impl Board {
         let b = self.black.all();
         (w, b, w | b)
     }
-    pub fn generate_legal_moves(&self, is_white: bool) -> Vec<Move> {
-        let pseudo_moves = self.generate_pseudo_legal_moves(is_white);
+    pub fn generate_legal_moves(&self) -> Vec<Move> {
+        let is_white = self.white_to_move;
+        let pseudo_moves = self.generate_pseudo_legal_moves();
         let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
         for m in pseudo_moves {
-            let next_state = self.make_move(&m, is_white);
+            let next_state = self.make_move(&m);
             if !next_state.is_in_check(is_white) {
                 legal_moves.push(m);
             }
         }
         legal_moves
     }
-    pub fn generate_pseudo_legal_moves(&self, is_white: bool) -> Vec<Move> {
+    pub fn generate_pseudo_legal_moves(&self) -> Vec<Move> {
         let mut moves = Vec::with_capacity(128);
+        let is_white = self.white_to_move;
         let (friendly, _enemy) = if is_white {
             (&self.white, &self.black)
         } else {
