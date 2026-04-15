@@ -196,47 +196,49 @@ pub fn find_best_move(
     }
     let mut killers: [[Option<Move>; 2]; MAX_PLY] = [[None; 2]; MAX_PLY];
     let mut best_move = moves[0];
-    let mut max_val = f32::NEG_INFINITY;
-    let mut alpha = f32::NEG_INFINITY;
-    let beta = f32::INFINITY;
-    let mut tt_move: Option<Move> = None;
-    if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
-        tt_move = tt_entry.best_move;
-    }
-    let mut scored_moves: Vec<(Move, i32)> = moves
-        .into_iter()
-        .map(|m| {
-            let score = score_move(board, &m, 0, &killers, tt_move);
-            (m, score)
-        })
-        .collect();
-    scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
-    for (m, _) in scored_moves {
-        let next_board = board.make_move(&m);
-        let score = -evaluate_position(
-            &next_board,
-            engine_nn,
-            depth - 1,
-            1,
-            -beta,
-            -alpha,
-            &mut killers,
-            tt_table,
-        );
-        if score > max_val {
-            max_val = score;
-            best_move = m;
+    for cur_depth in 1..=depth {
+        let mut max_val = f32::NEG_INFINITY;
+        let mut alpha = f32::NEG_INFINITY;
+        let beta = f32::INFINITY;
+        let mut tt_move: Option<Move> = None;
+        if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
+            tt_move = tt_entry.best_move;
         }
-        if alpha < score {
-            alpha = score;
+        let mut scored_moves: Vec<(Move, i32)> = moves
+            .iter()
+            .map(|m| {
+                let score = score_move(board, m, 0, &killers, tt_move);
+                (*m, score)
+            })
+            .collect();
+        scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
+        for (m, _) in scored_moves {
+            let next_board = board.make_move(&m);
+            let score = -evaluate_position(
+                &next_board,
+                engine_nn,
+                cur_depth - 1,
+                1,
+                -beta,
+                -alpha,
+                &mut killers,
+                tt_table,
+            );
+            if score > max_val {
+                max_val = score;
+                best_move = m;
+            }
+            if alpha < score {
+                alpha = score;
+            }
+            tt_table.store(
+                board.zobrist_hash,
+                cur_depth,
+                max_val,
+                TTFlag::Exact,
+                Some(best_move),
+            );
         }
-        tt_table.store(
-            board.zobrist_hash,
-            depth,
-            max_val,
-            TTFlag::Exact,
-            Some(best_move),
-        );
     }
     Some(best_move)
 }
