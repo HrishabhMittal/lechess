@@ -1,4 +1,4 @@
-use std::{thread::sleep, time::Duration};
+use std::{io, time::Instant};
 
 use crate::{board::Board, nn::NeuralNet, tt::TranspositionTable};
 
@@ -14,11 +14,14 @@ fn main() {
     let mut tt_table = TranspositionTable::new(64);
     println!("\x1B[H\x1B[2J{}", board);
     let mut line = String::new();
-    let search_depth = 5;
+    let search_depth = 8;
     loop {
-        match best_move::find_best_move(&board, &engine_nn, search_depth, &mut tt_table) {
+        let mut total = 0;
+        let start = Instant::now();
+        match best_move::find_best_move(&mut board, &engine_nn, search_depth, &mut tt_table, &mut total)
+        {
             Some(best_move) => {
-                board = board.make_move(&best_move);
+                let _ = board.make_move(&best_move);
                 print!("\x1B[H\x1B[2J");
                 println!("{}", board);
                 line.clear();
@@ -32,5 +35,8 @@ fn main() {
                 break;
             }
         }
+        println!("nodes touched: {}, in time: {:?}", total, start.elapsed());
+        let mut line = String::new();
+        io::stdin().read_line(&mut line).unwrap();
     }
 }

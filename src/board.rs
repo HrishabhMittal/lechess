@@ -100,6 +100,14 @@ pub struct Board {
     pub fullmove_number: u16,
     pub zobrist_hash: u64,
 }
+#[derive(Clone, Copy)]
+pub struct UndoState {
+    pub castling_rights: u8,
+    pub en_passant_target: Option<u8>,
+    pub halfmove_clock: u16,
+    pub captured_piece: Option<u64>,
+    pub old_hash: u64,
+}
 
 impl Board {
     pub fn new() -> Self {
@@ -489,65 +497,84 @@ impl Board {
         let king_sq = king_bb.trailing_zeros() as u8;
         self.is_square_attacked(king_sq, !is_white)
     }
-
-    pub fn make_move(&self, m: &Move) -> Board {
-        let mut next = self.clone();
+    pub fn make_move(&mut self, m: &Move) -> UndoState {
         let is_white = self.white_to_move;
+
+        let mut undo = UndoState {
+            castling_rights: self.castling_rights,
+            en_passant_target: self.en_passant_target,
+            halfmove_clock: self.halfmove_clock,
+            captured_piece: None,
+            old_hash: self.zobrist_hash,
+        };
+
+        let to_bb = 1u64 << m.to;
+        let enemy = if is_white { &self.black } else { &self.white };
+        if m.flag == MoveFlag::Capture
+            || matches!(
+                m.flag,
+                MoveFlag::PromoCaptureQueen
+                    | MoveFlag::PromoCaptureRook
+                    | MoveFlag::PromoCaptureBishop
+                    | MoveFlag::PromoCaptureKnight
+            )
+        {
+            if (enemy.pawn & to_bb) != 0 {
+                undo.captured_piece = Some(1);
+            } else if (enemy.knight & to_bb) != 0 {
+                undo.captured_piece = Some(2);
+            } else if (enemy.bishop & to_bb) != 0 {
+                undo.captured_piece = Some(3);
+            } else if (enemy.rook & to_bb) != 0 {
+                undo.captured_piece = Some(4);
+            } else if (enemy.queen & to_bb) != 0 {
+                undo.captured_piece = Some(5);
+            }
+        }
+
         let is_pawn = if is_white {
             (self.white.pawn & (1u64 << m.from)) != 0
         } else {
             (self.black.pawn & (1u64 << m.from)) != 0
         };
-        let is_capture = matches!(
-            m.flag,
-            MoveFlag::Capture
-                | MoveFlag::EnPassant
-                | MoveFlag::PromoCaptureKnight
-                | MoveFlag::PromoCaptureBishop
-                | MoveFlag::PromoCaptureRook
-                | MoveFlag::PromoCaptureQueen
-        );
+
+        let is_capture = undo.captured_piece.is_some() || m.flag == MoveFlag::EnPassant;
+
         if is_pawn || is_capture {
-            next.halfmove_clock = 0;
+            self.halfmove_clock = 0;
         } else {
-            next.halfmove_clock += 1;
+            self.halfmove_clock += 1;
         }
 
         if m.from == 4 {
-            next.castling_rights &= !0b0011;
+            self.castling_rights &= !0b0011;
         }
         if m.from == 60 {
-            next.castling_rights &= !0b1100;
+            self.castling_rights &= !0b1100;
         }
         if m.from == 7 || m.to == 7 {
-            next.castling_rights &= !0b0001;
+            self.castling_rights &= !0b0001;
         }
         if m.from == 0 || m.to == 0 {
-            next.castling_rights &= !0b0010;
+            self.castling_rights &= !0b0010;
         }
         if m.from == 63 || m.to == 63 {
-            next.castling_rights &= !0b0100;
+            self.castling_rights &= !0b0100;
         }
         if m.from == 56 || m.to == 56 {
-            next.castling_rights &= !0b1000;
+            self.castling_rights &= !0b1000;
         }
 
         let from_bb = 1u64 << m.from;
-        let to_bb = 1u64 << m.to;
         let move_mask = from_bb | to_bb;
 
         let (friendly, enemy) = if is_white {
-            (&mut next.white, &mut next.black)
+            (&mut self.white, &mut self.black)
         } else {
-            (&mut next.black, &mut next.white)
+            (&mut self.black, &mut self.white)
         };
 
-        if m.flag == MoveFlag::Capture
-            || m.flag == MoveFlag::PromoCaptureQueen
-            || m.flag == MoveFlag::PromoCaptureRook
-            || m.flag == MoveFlag::PromoCaptureBishop
-            || m.flag == MoveFlag::PromoCaptureKnight
-        {
+        if undo.captured_piece.is_some() {
             enemy.pawn &= !to_bb;
             enemy.knight &= !to_bb;
             enemy.bishop &= !to_bb;
@@ -592,34 +619,110 @@ impl Board {
             }
         }
 
-        next.en_passant_target = None;
+        self.en_passant_target = None;
         if m.flag == MoveFlag::DoublePawnPush {
-            next.en_passant_target = Some(if is_white { m.to - 8 } else { m.to + 8 });
+            self.en_passant_target = Some(if is_white { m.to - 8 } else { m.to + 8 });
         }
-        next.white_to_move = !is_white;
+        self.white_to_move = !is_white;
         if !is_white {
-            next.fullmove_number += 1;
+            self.fullmove_number += 1;
         }
 
-        next.zobrist_hash = next.compute_hash();
-        next
-    }
+        self.zobrist_hash = self.compute_hash();
 
+        undo
+    }
+    pub fn unmake_move(&mut self, m: &Move, undo: &UndoState) {
+        self.white_to_move = !self.white_to_move;
+        let is_white = self.white_to_move;
+
+        self.castling_rights = undo.castling_rights;
+        self.en_passant_target = undo.en_passant_target;
+        self.halfmove_clock = undo.halfmove_clock;
+        self.zobrist_hash = undo.old_hash;
+
+        if !is_white {
+            self.fullmove_number -= 1;
+        }
+
+        let from_bb = 1u64 << m.from;
+        let to_bb = 1u64 << m.to;
+        let move_mask = from_bb | to_bb;
+
+        let (friendly, enemy) = if is_white {
+            (&mut self.white, &mut self.black)
+        } else {
+            (&mut self.black, &mut self.white)
+        };
+
+        if (friendly.knight & to_bb) != 0
+            && !matches!(m.flag, MoveFlag::PromoKnight | MoveFlag::PromoCaptureKnight)
+        {
+            friendly.knight ^= move_mask;
+        } else if (friendly.bishop & to_bb) != 0
+            && !matches!(m.flag, MoveFlag::PromoBishop | MoveFlag::PromoCaptureBishop)
+        {
+            friendly.bishop ^= move_mask;
+        } else if (friendly.rook & to_bb) != 0
+            && !matches!(m.flag, MoveFlag::PromoRook | MoveFlag::PromoCaptureRook)
+        {
+            friendly.rook ^= move_mask;
+        } else if (friendly.queen & to_bb) != 0
+            && !matches!(m.flag, MoveFlag::PromoQueen | MoveFlag::PromoCaptureQueen)
+        {
+            friendly.queen ^= move_mask;
+        } else if (friendly.king & to_bb) != 0 {
+            friendly.king ^= move_mask;
+
+            if m.flag == MoveFlag::KingCastle {
+                let (r_from, r_to) = if is_white { (7, 5) } else { (63, 61) };
+                friendly.rook ^= (1u64 << r_from) | (1u64 << r_to);
+            } else if m.flag == MoveFlag::QueenCastle {
+                let (r_from, r_to) = if is_white { (0, 3) } else { (56, 59) };
+                friendly.rook ^= (1u64 << r_from) | (1u64 << r_to);
+            }
+        } else {
+            friendly.pawn |= from_bb;
+
+            match m.flag {
+                MoveFlag::PromoQueen | MoveFlag::PromoCaptureQueen => friendly.queen &= !to_bb,
+                MoveFlag::PromoRook | MoveFlag::PromoCaptureRook => friendly.rook &= !to_bb,
+                MoveFlag::PromoBishop | MoveFlag::PromoCaptureBishop => friendly.bishop &= !to_bb,
+                MoveFlag::PromoKnight | MoveFlag::PromoCaptureKnight => friendly.knight &= !to_bb,
+                _ => friendly.pawn &= !to_bb,
+            }
+        }
+
+        if let Some(piece_type) = undo.captured_piece {
+            match piece_type {
+                1 => enemy.pawn |= to_bb,
+                2 => enemy.knight |= to_bb,
+                3 => enemy.bishop |= to_bb,
+                4 => enemy.rook |= to_bb,
+                5 => enemy.queen |= to_bb,
+                _ => {}
+            }
+        } else if m.flag == MoveFlag::EnPassant {
+            let cap_sq = if is_white { m.to - 8 } else { m.to + 8 };
+            enemy.pawn |= 1u64 << cap_sq;
+        }
+    }
     pub fn get_occupancy(&self) -> (u64, u64, u64) {
         let w = self.white.all();
         let b = self.black.all();
         (w, b, w | b)
     }
 
-    pub fn generate_legal_moves(&self) -> Vec<Move> {
+    pub fn generate_legal_moves(&mut self) -> Vec<Move> {
         let is_white = self.white_to_move;
         let pseudo_moves = self.generate_pseudo_legal_moves();
         let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
         for m in pseudo_moves {
-            let next_state = self.make_move(&m);
-            if !next_state.is_in_check(is_white) {
+            let undo = self.make_move(&m);
+            if !self.is_in_check(is_white) {
                 legal_moves.push(m);
             }
+            self.unmake_move(&m, &undo);
         }
         legal_moves
     }

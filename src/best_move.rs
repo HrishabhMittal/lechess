@@ -85,7 +85,7 @@ fn score_move(
 }
 
 fn evaluate_position(
-    board: &Board,
+    board: &mut Board,
     engine_nn: &NeuralNet,
     depth: u32,
     ply: usize,
@@ -93,7 +93,9 @@ fn evaluate_position(
     mut beta: f32,
     killers: &mut [[Option<Move>; 2]; MAX_PLY],
     tt_table: &mut TranspositionTable,
+    total: &mut u32,
 ) -> f32 {
+    *total += 1;
     let og_alpha = alpha;
     let mut moves = board.generate_pseudo_legal_moves();
     if moves.is_empty() {
@@ -104,8 +106,8 @@ fn evaluate_position(
         }
     }
     if depth == 0 {
-        return engine_nn.evaluate(&board.to_features());
-        // return board.static_eval_color_neutral() as f32;
+        // return engine_nn.evaluate(&board.to_features());
+        return board.static_eval_color_neutral() as f32;
     }
     let mut tt_move: Option<Move> = None;
 
@@ -135,7 +137,7 @@ fn evaluate_position(
         }
 
         let null_score = -evaluate_position(
-            &null_board,
+            &mut null_board,
             engine_nn,
             depth - 1 - 2,
             ply + 1,
@@ -143,45 +145,80 @@ fn evaluate_position(
             -beta + 1.0,
             killers,
             tt_table,
+            total,
         );
 
         if null_score >= beta {
             return beta;
         }
     }
-    // let mut scored_moves: Vec<(Move, i32)> = moves
-    //     .into_iter()
-    //     .map(|m| {
-    //         let score = score_move(board, &m, ply, killers, tt_move);
-    //         (m, score)
-    //     })
-    //     .collect();
-
-    // scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
     moves.sort_unstable_by(|a, b| {
-        let score_a = score_move(board, a, 0, &killers, tt_move);
-        let score_b = score_move(board, b, 0, &killers, tt_move);
+        let score_a = score_move(board, a, ply, &killers, tt_move);
+        let score_b = score_move(board, b, ply, &killers, tt_move);
         score_b.cmp(&score_a)
     });
     let mut max_val = -50000.0;
     let mut tt_best = None;
     let mut legal_played = 0;
     for m in moves {
-        let next_board = board.make_move(&m);
-        if next_board.is_in_check(board.white_to_move) {
+        let undo = board.make_move(&m);
+        if board.is_in_check(!board.white_to_move) {
+            board.unmake_move(&m, &undo);
             continue;
         }
         legal_played += 1;
-        let score = -evaluate_position(
-            &next_board,
-            engine_nn,
-            depth - 1,
-            ply + 1,
-            -beta,
-            -alpha,
-            killers,
-            tt_table,
+        let is_capture = matches!(
+            m.flag,
+            MoveFlag::Capture
+                | MoveFlag::EnPassant
+                | MoveFlag::PromoCaptureQueen
+                | MoveFlag::PromoCaptureRook
+                | MoveFlag::PromoCaptureBishop
+                | MoveFlag::PromoCaptureKnight
         );
+        let score;
+        if legal_played > 3 && depth >= 3 && !is_capture && !board.is_in_check(board.white_to_move)
+        {
+            let reduced_score = -evaluate_position(
+                board,
+                engine_nn,
+                depth - 2,
+                ply + 1,
+                -beta,
+                -alpha,
+                killers,
+                tt_table,
+                total,
+            );
+
+            if reduced_score > alpha {
+                score = -evaluate_position(
+                    board,
+                    engine_nn,
+                    depth - 1,
+                    ply + 1,
+                    -beta,
+                    -alpha,
+                    killers,
+                    tt_table,
+                    total,
+                );
+            } else {
+                score = reduced_score;
+            }
+        } else {
+            score = -evaluate_position(
+                board,
+                engine_nn,
+                depth - 1,
+                ply + 1,
+                -beta,
+                -alpha,
+                killers,
+                tt_table,
+                total,
+            );
+        };
         if score > max_val {
             max_val = score;
             tt_best = Some(m);
@@ -205,8 +242,10 @@ fn evaluate_position(
                     killers[ply][0] = Some(m);
                 }
             }
+            board.unmake_move(&m, &undo);
             break;
         }
+        board.unmake_move(&m, &undo);
     }
     if legal_played == 0 {
         if board.is_in_check(board.white_to_move) {
@@ -227,10 +266,11 @@ fn evaluate_position(
 }
 
 pub fn find_best_move(
-    board: &Board,
+    board: &mut Board,
     engine_nn: &NeuralNet,
     depth: u32,
     tt_table: &mut TranspositionTable,
+    total: &mut u32,
 ) -> Option<Move> {
     let moves = board.generate_legal_moves();
     if moves.is_empty() {
@@ -254,10 +294,10 @@ pub fn find_best_move(
             })
             .collect();
         scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
-        for (m, _) in scored_moves.iter().take(depth as usize) {
-            let next_board = board.make_move(&m);
+        for (m, _) in scored_moves.iter() {
+            let undo = board.make_move(&m);
             let score = -evaluate_position(
-                &next_board,
+                board,
                 engine_nn,
                 cur_depth - 1,
                 1,
@@ -265,6 +305,7 @@ pub fn find_best_move(
                 -alpha,
                 &mut killers,
                 tt_table,
+                total,
             );
             if score > max_val {
                 max_val = score;
@@ -273,6 +314,7 @@ pub fn find_best_move(
             if alpha < score {
                 alpha = score;
             }
+            board.unmake_move(&m, &undo);
         }
         tt_table.store(
             board.zobrist_hash,

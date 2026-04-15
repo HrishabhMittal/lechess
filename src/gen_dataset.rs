@@ -20,9 +20,11 @@ fn get_random_evaluations(tx: Sender<String>, simple_or_fen: Encoding) {
             for _ in 1..5 {
                 let moves = board.generate_legal_moves();
                 let mov = moves.choose(&mut r);
-                board = match mov {
-                    Some(v) => board.make_move(v),
-                    None => board,
+                match mov {
+                    Some(v) => {
+                        let _ = board.make_move(v);
+                    }
+                    None => {}
                 };
                 if mov.is_none() {
                     inner_broken = true;
@@ -51,8 +53,7 @@ fn get_random_evaluations(tx: Sender<String>, simple_or_fen: Encoding) {
 pub fn gen_dataset(simple_or_fen: Encoding) {
     let mut file = File::create("dataset.csv").unwrap();
     file.write_all("board,Analysis\n".as_bytes()).unwrap();
-    // let num_cores = thread::available_parallelism().unwrap().get();
-    let num_cores = 10;
+    let num_cores = thread::available_parallelism().unwrap().get();
     let mut handles = vec![];
     let (tx, rx) = mpsc::channel::<String>();
     for _ in 0..num_cores {
