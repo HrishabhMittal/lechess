@@ -868,29 +868,29 @@ impl fmt::Display for Board {
                 let sq = rank * 8 + file;
                 let mask = 1u64 << sq;
                 let c = if (self.white.pawn & mask) != 0 {
-                    '\u{2659}'
-                } else if (self.black.pawn & mask) != 0 {
                     '\u{265F}'
+                } else if (self.black.pawn & mask) != 0 {
+                    '\u{2659}'
                 } else if (self.white.knight & mask) != 0 {
-                    '\u{2658}'
-                } else if (self.black.knight & mask) != 0 {
                     '\u{265E}'
+                } else if (self.black.knight & mask) != 0 {
+                    '\u{2658}'
                 } else if (self.white.bishop & mask) != 0 {
-                    '\u{2657}'
-                } else if (self.black.bishop & mask) != 0 {
                     '\u{265D}'
+                } else if (self.black.bishop & mask) != 0 {
+                    '\u{2657}'
                 } else if (self.white.rook & mask) != 0 {
-                    '\u{2656}'
-                } else if (self.black.rook & mask) != 0 {
                     '\u{265C}'
+                } else if (self.black.rook & mask) != 0 {
+                    '\u{2656}'
                 } else if (self.white.queen & mask) != 0 {
-                    '\u{2655}'
-                } else if (self.black.queen & mask) != 0 {
                     '\u{265B}'
+                } else if (self.black.queen & mask) != 0 {
+                    '\u{2655}'
                 } else if (self.white.king & mask) != 0 {
-                    '\u{2654}'
-                } else if (self.black.king & mask) != 0 {
                     '\u{265A}'
+                } else if (self.black.king & mask) != 0 {
+                    '\u{2654}'
                 } else {
                     '.'
                 };
