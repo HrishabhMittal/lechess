@@ -124,6 +124,78 @@ impl Board {
         }
         Ok(board)
     }
+
+    pub fn to_features(&self) -> [f32; 772] {
+        let mut features = [0.0; 772];
+        let is_white = self.white_to_move;
+
+        let mut add_pieces = |mut bb: u64, is_my_piece: bool, piece_idx: usize| {
+            let color_offset = if is_my_piece { 0 } else { 6 };
+
+            while bb != 0 {
+                let sq = bb.trailing_zeros() as usize;
+
+                let mapped_sq = if is_white { sq } else { sq ^ 56 };
+
+                let index = (color_offset + piece_idx) * 64 + mapped_sq;
+                features[index] = 1.0;
+
+                bb &= bb - 1;
+            }
+        };
+
+        let white_is_mine = is_white;
+        add_pieces(self.white.pawn, white_is_mine, 0);
+        add_pieces(self.white.knight, white_is_mine, 1);
+        add_pieces(self.white.bishop, white_is_mine, 2);
+        add_pieces(self.white.rook, white_is_mine, 3);
+        add_pieces(self.white.queen, white_is_mine, 4);
+        add_pieces(self.white.king, white_is_mine, 5);
+
+        let black_is_mine = !is_white;
+        add_pieces(self.black.pawn, black_is_mine, 0);
+        add_pieces(self.black.knight, black_is_mine, 1);
+        add_pieces(self.black.bishop, black_is_mine, 2);
+        add_pieces(self.black.rook, black_is_mine, 3);
+        add_pieces(self.black.queen, black_is_mine, 4);
+        add_pieces(self.black.king, black_is_mine, 5);
+
+        let wk = (self.castling_rights & 1) != 0;
+        let wq = (self.castling_rights & 2) != 0;
+        let bk = (self.castling_rights & 4) != 0;
+        let bq = (self.castling_rights & 8) != 0;
+
+        if is_white {
+            if wk {
+                features[768] = 1.0;
+            }
+            if wq {
+                features[769] = 1.0;
+            }
+            if bk {
+                features[770] = 1.0;
+            }
+            if bq {
+                features[771] = 1.0;
+            }
+        } else {
+            if bk {
+                features[768] = 1.0;
+            }
+            if bq {
+                features[769] = 1.0;
+            }
+            if wk {
+                features[770] = 1.0;
+            }
+            if wq {
+                features[771] = 1.0;
+            }
+        }
+
+        features
+    }
+
     pub fn to_simple(&self) -> String {
         let mut simple = String::with_capacity(75);
 
@@ -132,19 +204,33 @@ impl Board {
                 let sq = rank * 8 + file;
                 let bb = 1u64 << sq;
 
-                let c = if (self.white.pawn & bb) != 0 { 'P' }
-                else if (self.black.pawn & bb) != 0 { 'p' }
-                else if (self.white.knight & bb) != 0 { 'N' }
-                else if (self.black.knight & bb) != 0 { 'n' }
-                else if (self.white.bishop & bb) != 0 { 'B' }
-                else if (self.black.bishop & bb) != 0 { 'b' }
-                else if (self.white.rook & bb) != 0 { 'R' }
-                else if (self.black.rook & bb) != 0 { 'r' }
-                else if (self.white.queen & bb) != 0 { 'Q' }
-                else if (self.black.queen & bb) != 0 { 'q' }
-                else if (self.white.king & bb) != 0 { 'K' }
-                else if (self.black.king & bb) != 0 { 'k' }
-                else { '.' };
+                let c = if (self.white.pawn & bb) != 0 {
+                    'P'
+                } else if (self.black.pawn & bb) != 0 {
+                    'p'
+                } else if (self.white.knight & bb) != 0 {
+                    'N'
+                } else if (self.black.knight & bb) != 0 {
+                    'n'
+                } else if (self.white.bishop & bb) != 0 {
+                    'B'
+                } else if (self.black.bishop & bb) != 0 {
+                    'b'
+                } else if (self.white.rook & bb) != 0 {
+                    'R'
+                } else if (self.black.rook & bb) != 0 {
+                    'r'
+                } else if (self.white.queen & bb) != 0 {
+                    'Q'
+                } else if (self.black.queen & bb) != 0 {
+                    'q'
+                } else if (self.white.king & bb) != 0 {
+                    'K'
+                } else if (self.black.king & bb) != 0 {
+                    'k'
+                } else {
+                    '.'
+                };
                 simple.push(c);
             }
         }
@@ -156,10 +242,18 @@ impl Board {
         if self.castling_rights == 0 {
             simple.push('-');
         } else {
-            if (self.castling_rights & 1) != 0 { simple.push('K'); }
-            if (self.castling_rights & 2) != 0 { simple.push('Q'); }
-            if (self.castling_rights & 4) != 0 { simple.push('k'); }
-            if (self.castling_rights & 8) != 0 { simple.push('q'); }
+            if (self.castling_rights & 1) != 0 {
+                simple.push('K');
+            }
+            if (self.castling_rights & 2) != 0 {
+                simple.push('Q');
+            }
+            if (self.castling_rights & 4) != 0 {
+                simple.push('k');
+            }
+            if (self.castling_rights & 8) != 0 {
+                simple.push('q');
+            }
         }
         simple
     }
