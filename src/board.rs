@@ -16,7 +16,7 @@ pub enum MoveFlag {
     PromoCaptureRook,
     PromoCaptureQueen,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Move {
     pub from: u8,
     pub to: u8,
