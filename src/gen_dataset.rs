@@ -1,4 +1,4 @@
-use crate::{board::*, eval::Stockfish};
+use crate::{board::*, stockfish::Stockfish};
 use rand::{prelude::*, rng};
 use std::sync::mpsc::Sender;
 use std::{fs::File, io::Write, sync::mpsc, thread};

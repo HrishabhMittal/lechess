@@ -4,17 +4,20 @@ use crate::{board::Board, nn::NeuralNet, tt::TranspositionTable};
 
 mod best_move;
 mod board;
-mod eval;
+mod stockfish;
 mod gen_dataset;
 mod nn;
 mod tt;
+mod move_list;
+
+
 fn main() {
     let engine_nn = NeuralNet::load("models/weights.json");
     let mut board = Board::new();
-    let mut tt_table = TranspositionTable::new(64);
+    let mut tt_table = TranspositionTable::new(128);
     println!("\x1B[H\x1B[2J{}", board);
     let mut line = String::new();
-    let search_depth = 8;
+    let search_depth = 9;
     loop {
         let mut total = 0;
         let start = Instant::now();

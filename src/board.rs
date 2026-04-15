@@ -1,6 +1,6 @@
+use crate::move_list::MoveList;
 use core::fmt;
 use std::sync::OnceLock;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MoveFlag {
     Quiet,
@@ -44,7 +44,8 @@ impl Pieces {
         return (self.pawn.count_ones()
             + (self.knight | self.bishop).count_ones() * 3
             + self.rook.count_ones() * 5
-            + self.queen.count_ones() * 9) as i32;
+            + self.queen.count_ones() * 9
+            + self.king.count_ones() * 100) as i32;
     }
 }
 
@@ -713,11 +714,11 @@ impl Board {
         (w, b, w | b)
     }
 
-    pub fn generate_legal_moves(&mut self) -> Vec<Move> {
+    pub fn generate_legal_moves(&mut self) -> MoveList {
         let is_white = self.white_to_move;
         let pseudo_moves = self.generate_pseudo_legal_moves();
-        let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
-        for m in pseudo_moves {
+        let mut legal_moves = MoveList::new();
+        for m in pseudo_moves.iter().copied() {
             let undo = self.make_move(&m);
             if !self.is_in_check(is_white) {
                 legal_moves.push(m);
@@ -727,8 +728,8 @@ impl Board {
         legal_moves
     }
 
-    pub fn generate_pseudo_legal_moves(&self) -> Vec<Move> {
-        let mut moves = Vec::with_capacity(128);
+    pub fn generate_pseudo_legal_moves(&self) -> MoveList {
+        let mut moves = MoveList::new();
         let is_white = self.white_to_move;
         let (friendly, _enemy) = if is_white {
             (&self.white, &self.black)
@@ -759,7 +760,7 @@ impl Board {
 
     fn generate_pawn_moves(
         &self,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
         pawns: u64,
         empty: u64,
         enemy_occ: u64,
@@ -825,7 +826,7 @@ impl Board {
 
     fn extract_pawn_moves(
         &self,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
         mut bb: u64,
         offset: i8,
         default_flag: MoveFlag,
@@ -886,7 +887,7 @@ impl Board {
 
     fn generate_king_moves(
         &self,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
         king: u64,
         friend_occ: u64,
         enemy_occ: u64,
@@ -952,7 +953,7 @@ impl Board {
 
     fn generate_knight_moves(
         &self,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
         mut knights: u64,
         friend_occ: u64,
         enemy_occ: u64,
@@ -968,7 +969,7 @@ impl Board {
 
     fn generate_sliding_moves(
         &self,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
         bishops: u64,
         rooks: u64,
         queens: u64,
@@ -996,7 +997,7 @@ impl Board {
         }
     }
 
-    fn extract_moves(&self, moves: &mut Vec<Move>, mut bb: u64, from: u8, flag: MoveFlag) {
+    fn extract_moves(&self, moves: &mut MoveList, mut bb: u64, from: u8, flag: MoveFlag) {
         while bb != 0 {
             let to = bb.trailing_zeros() as u8;
             moves.push(Move { from, to, flag });

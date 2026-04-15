@@ -160,7 +160,7 @@ fn evaluate_position(
     let mut max_val = -50000.0;
     let mut tt_best = None;
     let mut legal_played = 0;
-    for m in moves {
+    for m in moves.iter().copied() {
         let undo = board.make_move(&m);
         if board.is_in_check(!board.white_to_move) {
             board.unmake_move(&m, &undo);
