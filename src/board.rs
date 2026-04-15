@@ -124,6 +124,45 @@ impl Board {
         }
         Ok(board)
     }
+    pub fn to_simple(&self) -> String {
+        let mut simple = String::with_capacity(75);
+
+        for rank in (0..8).rev() {
+            for file in 0..8 {
+                let sq = rank * 8 + file;
+                let bb = 1u64 << sq;
+
+                let c = if (self.white.pawn & bb) != 0 { 'P' }
+                else if (self.black.pawn & bb) != 0 { 'p' }
+                else if (self.white.knight & bb) != 0 { 'N' }
+                else if (self.black.knight & bb) != 0 { 'n' }
+                else if (self.white.bishop & bb) != 0 { 'B' }
+                else if (self.black.bishop & bb) != 0 { 'b' }
+                else if (self.white.rook & bb) != 0 { 'R' }
+                else if (self.black.rook & bb) != 0 { 'r' }
+                else if (self.white.queen & bb) != 0 { 'Q' }
+                else if (self.black.queen & bb) != 0 { 'q' }
+                else if (self.white.king & bb) != 0 { 'K' }
+                else if (self.black.king & bb) != 0 { 'k' }
+                else { '.' };
+                simple.push(c);
+            }
+        }
+
+        simple.push(' ');
+        simple.push(if self.white_to_move { 'w' } else { 'b' });
+
+        simple.push(' ');
+        if self.castling_rights == 0 {
+            simple.push('-');
+        } else {
+            if (self.castling_rights & 1) != 0 { simple.push('K'); }
+            if (self.castling_rights & 2) != 0 { simple.push('Q'); }
+            if (self.castling_rights & 4) != 0 { simple.push('k'); }
+            if (self.castling_rights & 8) != 0 { simple.push('q'); }
+        }
+        simple
+    }
     pub fn to_fen(&self) -> String {
         let mut fen = String::new();
         for rank in (0..8).rev() {

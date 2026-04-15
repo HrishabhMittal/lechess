@@ -2,7 +2,13 @@ use crate::{board::*, eval::Stockfish};
 use rand::{prelude::*, rng};
 use std::sync::mpsc::Sender;
 use std::{fs::File, io::Write, sync::mpsc, thread};
-fn get_random_evaluations(tx: Sender<String>) {
+#[derive(Clone, Copy)]
+pub enum Encoding {
+    Simple,
+    Fen,
+}
+
+fn get_random_evaluations(tx: Sender<String>, simple_or_fen: Encoding) {
     let mut sf = Stockfish::new(None);
     let mut r = rng();
     let total = 1000;
@@ -22,8 +28,17 @@ fn get_random_evaluations(tx: Sender<String>) {
                     break;
                 }
             }
+            let str;
             let fen = board.to_fen();
-            let str = format!("{},{}\n", fen, sf.get_eval(&fen, 22));
+            match simple_or_fen {
+                Encoding::Fen => {
+                    str = format!("{},{}\n", fen, sf.get_eval(&fen, 22));
+                }
+                Encoding::Simple => {
+                    let simple = board.to_simple();
+                    str = format!("{},{}\n", simple, sf.get_eval(&fen, 22));
+                }
+            }
             tx.send(str).unwrap();
             if inner_broken {
                 break;
@@ -32,16 +47,16 @@ fn get_random_evaluations(tx: Sender<String>) {
     }
 }
 
-pub fn gen_dataset() {
+pub fn gen_dataset(simple_or_fen: Encoding) {
     let mut file = File::create("dataset.csv").unwrap();
-    file.write_all("FEN,Analysis\n".as_bytes()).unwrap();
+    file.write_all("board,Analysis\n".as_bytes()).unwrap();
     let num_cores = thread::available_parallelism().unwrap().get();
     let mut handles = vec![];
     let (tx, rx) = mpsc::channel::<String>();
     for _ in 0..num_cores {
         let tx_clone = tx.clone();
-        let handle = thread::spawn(|| {
-            get_random_evaluations(tx_clone);
+        let handle = thread::spawn(move || {
+            get_random_evaluations(tx_clone, simple_or_fen);
         });
         handles.push(handle);
     }

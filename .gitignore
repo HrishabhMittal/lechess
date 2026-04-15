@@ -1,2 +1,5 @@
 /target
-/dataset
+dataset
+__pycache__
+*.pt
+*.pth
