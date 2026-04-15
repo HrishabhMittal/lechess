@@ -17,7 +17,7 @@ fn main() {
     let mut tt_table = TranspositionTable::new(128);
     println!("\x1B[H\x1B[2J{}", board);
     let mut line = String::new();
-    let search_depth = 9;
+    let search_depth = 10;
     loop {
         let mut total = 0;
         let start = Instant::now();

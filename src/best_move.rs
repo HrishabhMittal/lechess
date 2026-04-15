@@ -87,7 +87,7 @@ fn score_move(
 fn evaluate_position(
     board: &mut Board,
     engine_nn: &NeuralNet,
-    depth: u32,
+    mut depth: u32,
     ply: usize,
     mut alpha: f32,
     mut beta: f32,
@@ -106,21 +106,30 @@ fn evaluate_position(
         }
     }
     if depth == 0 {
-        // return engine_nn.evaluate(&board.to_features());
-        return board.static_eval_color_neutral() as f32;
+        if board.is_in_check(board.white_to_move) {
+            depth += 1;
+        } else {
+            return board.static_eval_color_neutral() as f32;
+        }
     }
     let mut tt_move: Option<Move> = None;
 
     if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
         tt_move = tt_entry.best_move;
         if tt_entry.depth >= depth {
+            let mut tt_score = tt_entry.score;
+            if tt_score > 9000.0 {
+                tt_score -= ply as f32;
+            } else if tt_score < -9000.0 {
+                tt_score += ply as f32;
+            }
             match tt_entry.flag {
-                TTFlag::Exact => return tt_entry.score,
-                TTFlag::LowerBound => alpha = alpha.max(tt_entry.score),
-                TTFlag::UpperBound => beta = beta.min(tt_entry.score),
+                TTFlag::Exact => return tt_score,
+                TTFlag::LowerBound => alpha = alpha.max(tt_score),
+                TTFlag::UpperBound => beta = beta.min(tt_score),
             }
             if alpha >= beta {
-                return tt_entry.score;
+                return tt_score;
             }
         }
     }
@@ -176,37 +185,8 @@ fn evaluate_position(
                 | MoveFlag::PromoCaptureBishop
                 | MoveFlag::PromoCaptureKnight
         );
-        let score;
-        if legal_played > 3 && depth >= 3 && !is_capture && !board.is_in_check(board.white_to_move)
-        {
-            let reduced_score = -evaluate_position(
-                board,
-                engine_nn,
-                depth - 2,
-                ply + 1,
-                -beta,
-                -alpha,
-                killers,
-                tt_table,
-                total,
-            );
-
-            if reduced_score > alpha {
-                score = -evaluate_position(
-                    board,
-                    engine_nn,
-                    depth - 1,
-                    ply + 1,
-                    -beta,
-                    -alpha,
-                    killers,
-                    tt_table,
-                    total,
-                );
-            } else {
-                score = reduced_score;
-            }
-        } else {
+        let mut score;
+        if legal_played == 1 {
             score = -evaluate_position(
                 board,
                 engine_nn,
@@ -218,7 +198,77 @@ fn evaluate_position(
                 tt_table,
                 total,
             );
-        };
+        } else {
+            if legal_played > 3
+                && depth >= 3
+                && !is_capture
+                && !board.is_in_check(board.white_to_move)
+            {
+                score = -evaluate_position(
+                    board,
+                    engine_nn,
+                    depth - 2,
+                    ply + 1,
+                    -alpha - 1.0,
+                    -alpha,
+                    killers,
+                    tt_table,
+                    total,
+                );
+
+                if score > alpha {
+                    score = -evaluate_position(
+                        board,
+                        engine_nn,
+                        depth - 1,
+                        ply + 1,
+                        -alpha - 1.0,
+                        -alpha,
+                        killers,
+                        tt_table,
+                        total,
+                    );
+                    if score > alpha && score < beta {
+                        score = -evaluate_position(
+                            board,
+                            engine_nn,
+                            depth - 1,
+                            ply + 1,
+                            -beta,
+                            -alpha,
+                            killers,
+                            tt_table,
+                            total,
+                        );
+                    }
+                }
+            } else {
+                score = -evaluate_position(
+                    board,
+                    engine_nn,
+                    depth - 1,
+                    ply + 1,
+                    -alpha - 1.0,
+                    -alpha,
+                    killers,
+                    tt_table,
+                    total,
+                );
+                if score > alpha && score < beta {
+                    score = -evaluate_position(
+                        board,
+                        engine_nn,
+                        depth - 1,
+                        ply + 1,
+                        -beta,
+                        -alpha,
+                        killers,
+                        tt_table,
+                        total,
+                    );
+                }
+            }
+        }
         if score > max_val {
             max_val = score;
             tt_best = Some(m);
@@ -249,7 +299,7 @@ fn evaluate_position(
     }
     if legal_played == 0 {
         if board.is_in_check(board.white_to_move) {
-            return -10000.0 - (ply as f32);
+            return -10000.0 + (ply as f32);
         } else {
             return 0.0;
         }
@@ -261,7 +311,13 @@ fn evaluate_position(
     } else {
         TTFlag::Exact
     };
-    tt_table.store(board.zobrist_hash, depth, max_val, flag, tt_best);
+    let mut store_score = max_val;
+    if store_score > 9000.0 {
+        store_score += ply as f32;
+    } else if store_score < -9000.0 {
+        store_score -= ply as f32;
+    }
+    tt_table.store(board.zobrist_hash, depth, store_score, flag, tt_best);
     max_val
 }
 
