@@ -12,6 +12,12 @@ weights = {
     
     "fc2_weight": model.fc2.weight.detach().numpy().tolist(),
     "fc2_bias": model.fc2.bias.detach().numpy().tolist(),
+    
+    "fc3_weight": model.fc3.weight.detach().numpy().tolist(),
+    "fc3_bias": model.fc3.bias.detach().numpy().tolist(),
+    
+    "fc4_weight": model.fc4.weight.detach().numpy().tolist(),
+    "fc4_bias": model.fc4.bias.detach().numpy().tolist(),
 }
 with open("weights.json", "w") as f:
     json.dump(weights, f)

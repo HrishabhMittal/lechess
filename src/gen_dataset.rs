@@ -11,7 +11,8 @@ pub enum Encoding {
 fn get_random_evaluations(tx: Sender<String>, simple_or_fen: Encoding) {
     let mut sf = Stockfish::new(None);
     let mut r = rng();
-    let total = 1000;
+    let depth = 12;
+    let total = 10000;
     for _ in 1..total {
         let mut board = Board::new();
         for _ in 1..10 {
@@ -32,11 +33,11 @@ fn get_random_evaluations(tx: Sender<String>, simple_or_fen: Encoding) {
             let fen = board.to_fen();
             match simple_or_fen {
                 Encoding::Fen => {
-                    str = format!("{},{}\n", fen, sf.get_eval(&fen, 22));
+                    str = format!("{},{}\n", fen, sf.get_eval(&fen, depth));
                 }
                 Encoding::Simple => {
                     let simple = board.to_simple();
-                    str = format!("{},{}\n", simple, sf.get_eval(&fen, 22));
+                    str = format!("{},{}\n", simple, sf.get_eval(&fen, depth));
                 }
             }
             tx.send(str).unwrap();
@@ -50,7 +51,8 @@ fn get_random_evaluations(tx: Sender<String>, simple_or_fen: Encoding) {
 pub fn gen_dataset(simple_or_fen: Encoding) {
     let mut file = File::create("dataset.csv").unwrap();
     file.write_all("board,Analysis\n".as_bytes()).unwrap();
-    let num_cores = thread::available_parallelism().unwrap().get();
+    // let num_cores = thread::available_parallelism().unwrap().get();
+    let num_cores = 10;
     let mut handles = vec![];
     let (tx, rx) = mpsc::channel::<String>();
     for _ in 0..num_cores {

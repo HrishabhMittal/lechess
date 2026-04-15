@@ -6,19 +6,20 @@ class ChessNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.fc1 = nn.Linear(772, 256) 
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(256, 1)
+        self.fc2 = nn.Linear(256, 32)
+        self.fc3 = nn.Linear(32, 32)
+        self.fc4 = nn.Linear(32, 1)
         self.sigmoid = nn.Sigmoid()
         
     def forward(self, x):
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
+        x = torch.clamp(self.fc1(x), 0.0, 1.0)
+        x = torch.clamp(self.fc2(x), 0.0, 1.0)
+        x = torch.clamp(self.fc3(x), 0.0, 1.0)
+        
+        x = self.fc4(x)
         return self.sigmoid(x)
 
 if __name__=="__main__":
-    print("Loading binary tensors...")
     data = torch.load("dataset_tensors.pt", weights_only=False) 
     X = data['X']
     Y = data['Y']
@@ -53,21 +54,11 @@ if __name__=="__main__":
     criterion = nn.MSELoss() 
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-    epochs = 10
     
-    model.eval() 
-    total_val_loss = 0.0
-    with torch.no_grad(): 
-        for features, targets in val_loader:
-            features = features.to(device)
-            targets = targets.to(device)
-            
-            predictions = model(features)
-            loss = criterion(predictions, targets)
-            total_val_loss += loss.item()
-            
-    avg_val_loss = total_val_loss / len(val_loader)
-    print(f"epoch 0/{epochs} | val loss: {avg_val_loss:.4f}")
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=2, verbose=True)
+    
+    epochs = 30 
+    
     for epoch in range(epochs):
         model.train() 
         total_train_loss = 0.0
@@ -97,7 +88,11 @@ if __name__=="__main__":
                 
         avg_train_loss = total_train_loss / len(train_loader)
         avg_val_loss = total_val_loss / len(val_loader)
-        print(f"epoch {epoch+1}/{epochs} | train loss: {avg_train_loss:.4f} | val loss: {avg_val_loss:.4f}")
+        
+        scheduler.step(avg_val_loss)
+        
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"epoch {epoch+1}/{epochs} | LR: {current_lr:.6f} | train loss: {avg_train_loss:.4f} | val loss: {avg_val_loss:.4f}")
         
     torch.save(model.state_dict(), "chess_model.pth")
     print("training complete")
