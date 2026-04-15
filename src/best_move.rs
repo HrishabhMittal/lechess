@@ -95,7 +95,7 @@ fn evaluate_position(
     tt_table: &mut TranspositionTable,
 ) -> f32 {
     let og_alpha = alpha;
-    let moves = board.generate_legal_moves();
+    let mut moves = board.generate_pseudo_legal_moves();
     if moves.is_empty() {
         if board.is_in_check(board.white_to_move) {
             return -10000.0 - (depth as f32);
@@ -104,8 +104,8 @@ fn evaluate_position(
         }
     }
     if depth == 0 {
-        return engine_nn.evaluate(&board.to_features());
-        // return board.static_eval_color_neutral() as f32;
+        // return engine_nn.evaluate(&board.to_features());
+        return board.static_eval_color_neutral() as f32;
     }
     let mut tt_move: Option<Move> = None;
 
@@ -123,19 +123,29 @@ fn evaluate_position(
         }
     }
 
-    let mut scored_moves: Vec<(Move, i32)> = moves
-        .into_iter()
-        .map(|m| {
-            let score = score_move(board, &m, ply, killers, tt_move);
-            (m, score)
-        })
-        .collect();
+    // let mut scored_moves: Vec<(Move, i32)> = moves
+    //     .into_iter()
+    //     .map(|m| {
+    //         let score = score_move(board, &m, ply, killers, tt_move);
+    //         (m, score)
+    //     })
+    //     .collect();
 
-    scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
+    // scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
+    moves.sort_unstable_by(|a, b| {
+        let score_a = score_move(board, a, 0, &killers, tt_move);
+        let score_b = score_move(board, b, 0, &killers, tt_move);
+        score_b.cmp(&score_a)
+    });
     let mut max_val = f32::NEG_INFINITY;
     let mut tt_best = None;
-    for (m, _) in scored_moves {
+    let mut legal_played = 0;
+    for m in moves {
         let next_board = board.make_move(&m);
+        if next_board.is_in_check(board.white_to_move) {
+            continue;
+        }
+        legal_played += 1;
         let score = -evaluate_position(
             &next_board,
             engine_nn,
@@ -172,7 +182,13 @@ fn evaluate_position(
             break;
         }
     }
-
+    if legal_played == 0 {
+        if board.is_in_check(board.white_to_move) {
+            return -10000.0 - (ply as f32);
+        } else {
+            return 0.0;
+        }
+    }
     let flag = if max_val <= og_alpha {
         TTFlag::UpperBound
     } else if max_val >= beta {
@@ -231,14 +247,14 @@ pub fn find_best_move(
             if alpha < score {
                 alpha = score;
             }
-            tt_table.store(
-                board.zobrist_hash,
-                cur_depth,
-                max_val,
-                TTFlag::Exact,
-                Some(best_move),
-            );
         }
+        tt_table.store(
+            board.zobrist_hash,
+            cur_depth,
+            max_val,
+            TTFlag::Exact,
+            Some(best_move),
+        );
     }
     Some(best_move)
 }
