@@ -32,10 +32,10 @@ impl Stockfish {
             reader,
         }
     }
-    pub fn get_eval(&mut self, fen: &str, depth: u8) -> f32 {
+    pub fn get_eval(&mut self, fen: &str, depth: u8) -> i32 {
         writeln!(self.stdin, "position fen {}", fen).unwrap();
         writeln!(self.stdin, "go depth {}", depth).unwrap();
-        let mut final_score = 0.0;
+        let mut final_score = 0;
         let mut line = String::new();
         loop {
             line.clear();
@@ -46,11 +46,11 @@ impl Stockfish {
                 if let Some(score_idx) = tokens.iter().position(|&x| x == "score") {
                     if tokens.len() > score_idx + 2 {
                         let score_type = tokens[score_idx + 1];
-                        let score_val = tokens[score_idx + 2].parse::<f32>().unwrap_or(0.0);
+                        let score_val = tokens[score_idx + 2].parse::<i32>().unwrap_or(0);
                         if score_type == "cp" {
-                            final_score = score_val / 100.0;
+                            final_score = score_val;
                         } else if score_type == "mate" {
-                            final_score = if score_val > 0.0 { 1000.0 } else { -1000.0 };
+                            final_score = if score_val > 0 { 8500 } else { -8500 };
                         }
                     }
                 }
