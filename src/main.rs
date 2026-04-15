@@ -1,23 +1,20 @@
-use crate::{
-    board::Board,
-    nn::NeuralNet,
-};
+use crate::{board::Board, nn::NeuralNet, tt::TranspositionTable};
 
+mod best_move;
 mod board;
 mod eval;
 mod gen_dataset;
 mod nn;
-mod best_move;
-
+mod tt;
 fn main() {
     let engine_nn = NeuralNet::load("models/weights.json");
     let mut board = Board::new();
-
+    let mut tt_table = TranspositionTable::new(16);
     println!("\x1B[H\x1B[2J{}", board);
     let mut line = String::new();
     let search_depth = 4;
-    for _ in 1..=100 {
-        match best_move::find_best_move(&board, &engine_nn, search_depth) {
+    loop {
+        match best_move::find_best_move(&board, &engine_nn, search_depth, &mut tt_table) {
             Some(best_move) => {
                 board = board.make_move(&best_move);
                 print!("\x1B[H\x1B[2J");

@@ -1,6 +1,7 @@
 use crate::{
     board::{Board, Move, MoveFlag},
     nn::NeuralNet,
+    tt::{TTFlag, TranspositionTable},
 };
 const MAX_PLY: usize = 128;
 
@@ -37,7 +38,16 @@ fn piece_at(board: &Board, sq: u8) -> usize {
     6
 }
 
-fn score_move(board: &Board, m: &Move, ply: usize, killers: &[[Option<Move>; 2]; MAX_PLY]) -> i32 {
+fn score_move(
+    board: &Board,
+    m: &Move,
+    ply: usize,
+    killers: &[[Option<Move>; 2]; MAX_PLY],
+    tt_move: Option<Move>,
+) -> i32 {
+    if Some(*m) == tt_move {
+        return 30000;
+    }
     let mut score = 0;
     match m.flag {
         MoveFlag::PromoQueen | MoveFlag::PromoCaptureQueen => score += 900,
@@ -80,9 +90,11 @@ fn evaluate_position(
     depth: u32,
     ply: usize,
     mut alpha: f32,
-    beta: f32,
+    mut beta: f32,
     killers: &mut [[Option<Move>; 2]; MAX_PLY],
+    tt_table: &mut TranspositionTable,
 ) -> f32 {
+    let og_alpha = alpha;
     let moves = board.generate_legal_moves();
     if moves.is_empty() {
         if board.is_in_check(board.white_to_move) {
@@ -93,16 +105,35 @@ fn evaluate_position(
     }
     if depth == 0 {
         return engine_nn.evaluate(&board.to_features());
+        // return board.static_eval_color_neutral() as f32;
     }
+    let mut tt_move: Option<Move> = None;
+
+    if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
+        tt_move = tt_entry.best_move;
+        if tt_entry.depth >= depth {
+            match tt_entry.flag {
+                TTFlag::Exact => return tt_entry.score,
+                TTFlag::LowerBound => alpha = alpha.max(tt_entry.score),
+                TTFlag::UpperBound => beta = beta.min(tt_entry.score),
+            }
+            if alpha >= beta {
+                return tt_entry.score;
+            }
+        }
+    }
+
     let mut scored_moves: Vec<(Move, i32)> = moves
         .into_iter()
         .map(|m| {
-            let score = score_move(board, &m, ply, killers);
+            let score = score_move(board, &m, ply, killers, tt_move);
             (m, score)
         })
         .collect();
+
     scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
     let mut max_val = f32::NEG_INFINITY;
+    let mut tt_best = None;
     for (m, _) in scored_moves {
         let next_board = board.make_move(&m);
         let score = -evaluate_position(
@@ -113,9 +144,11 @@ fn evaluate_position(
             -beta,
             -alpha,
             killers,
+            tt_table,
         );
         if score > max_val {
             max_val = score;
+            tt_best = Some(m);
         }
         if alpha < score {
             alpha = score;
@@ -139,10 +172,24 @@ fn evaluate_position(
             break;
         }
     }
+
+    let flag = if max_val <= og_alpha {
+        TTFlag::UpperBound
+    } else if max_val >= beta {
+        TTFlag::LowerBound
+    } else {
+        TTFlag::Exact
+    };
+    tt_table.store(board.zobrist_hash, depth, max_val, flag, tt_best);
     max_val
 }
 
-pub fn find_best_move(board: &Board, engine_nn: &NeuralNet, depth: u32) -> Option<Move> {
+pub fn find_best_move(
+    board: &Board,
+    engine_nn: &NeuralNet,
+    depth: u32,
+    tt_table: &mut TranspositionTable,
+) -> Option<Move> {
     let moves = board.generate_legal_moves();
     if moves.is_empty() {
         return None;
@@ -152,10 +199,14 @@ pub fn find_best_move(board: &Board, engine_nn: &NeuralNet, depth: u32) -> Optio
     let mut max_val = f32::NEG_INFINITY;
     let mut alpha = f32::NEG_INFINITY;
     let beta = f32::INFINITY;
+    let mut tt_move: Option<Move> = None;
+    if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
+        tt_move = tt_entry.best_move;
+    }
     let mut scored_moves: Vec<(Move, i32)> = moves
         .into_iter()
         .map(|m| {
-            let score = score_move(board, &m, 0, &killers);
+            let score = score_move(board, &m, 0, &killers, tt_move);
             (m, score)
         })
         .collect();
@@ -170,6 +221,7 @@ pub fn find_best_move(board: &Board, engine_nn: &NeuralNet, depth: u32) -> Optio
             -beta,
             -alpha,
             &mut killers,
+            tt_table,
         );
         if score > max_val {
             max_val = score;
@@ -178,6 +230,13 @@ pub fn find_best_move(board: &Board, engine_nn: &NeuralNet, depth: u32) -> Optio
         if alpha < score {
             alpha = score;
         }
+        tt_table.store(
+            board.zobrist_hash,
+            depth,
+            max_val,
+            TTFlag::Exact,
+            Some(best_move),
+        );
     }
     Some(best_move)
 }

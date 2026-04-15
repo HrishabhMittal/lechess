@@ -1,4 +1,6 @@
 use core::fmt;
+use std::sync::OnceLock;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MoveFlag {
     Quiet,
@@ -16,12 +18,14 @@ pub enum MoveFlag {
     PromoCaptureRook,
     PromoCaptureQueen,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Move {
     pub from: u8,
     pub to: u8,
     pub flag: MoveFlag,
 }
+
 #[derive(Clone, Copy)]
 pub struct Pieces {
     pub pawn: u64,
@@ -31,11 +35,60 @@ pub struct Pieces {
     pub queen: u64,
     pub king: u64,
 }
+
 impl Pieces {
     pub fn all(&self) -> u64 {
         self.pawn | self.knight | self.bishop | self.rook | self.queen | self.king
     }
+    pub fn all_sum(&self) -> i32 {
+        return (self.pawn.count_ones()
+            + (self.knight | self.bishop).count_ones() * 3
+            + self.rook.count_ones() * 5
+            + self.queen.count_ones() * 9) as i32;
+    }
 }
+
+pub struct ZobristKeys {
+    pub pieces: [[u64; 64]; 12],
+    pub side_to_move: u64,
+    pub castling: [u64; 16],
+    pub en_passant: [u64; 8],
+}
+
+pub static ZOBRIST: OnceLock<ZobristKeys> = OnceLock::new();
+
+pub fn get_zobrist() -> &'static ZobristKeys {
+    ZOBRIST.get_or_init(|| {
+        let mut prng = 1070372_u64;
+        let mut next_rand = || -> u64 {
+            prng ^= prng << 13;
+            prng ^= prng >> 7;
+            prng ^= prng << 17;
+            prng
+        };
+
+        let mut z = ZobristKeys {
+            pieces: [[0; 64]; 12],
+            side_to_move: next_rand(),
+            castling: [0; 16],
+            en_passant: [0; 8],
+        };
+
+        for p in 0..12 {
+            for sq in 0..64 {
+                z.pieces[p][sq] = next_rand();
+            }
+        }
+        for c in 0..16 {
+            z.castling[c] = next_rand();
+        }
+        for f in 0..8 {
+            z.en_passant[f] = next_rand();
+        }
+        z
+    })
+}
+
 #[derive(Clone)]
 pub struct Board {
     pub white: Pieces,
@@ -45,10 +98,19 @@ pub struct Board {
     pub white_to_move: bool,
     pub halfmove_clock: u16,
     pub fullmove_number: u16,
+    pub zobrist_hash: u64,
 }
+
 impl Board {
     pub fn new() -> Self {
         Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap()
+    }
+    pub fn static_eval_color_neutral(&self) -> i32 {
+        if self.white_to_move {
+            return self.white.all_sum() - self.black.all_sum();
+        } else {
+            return self.black.all_sum() - self.white.all_sum();
+        }
     }
     pub fn from_fen(fen: &str) -> Result<Self, &'static str> {
         let parts: Vec<&str> = fen.split_whitespace().collect();
@@ -77,6 +139,7 @@ impl Board {
             white_to_move: parts[1] == "w",
             halfmove_clock: parts.get(4).unwrap_or(&"0").parse().unwrap_or(0),
             fullmove_number: parts.get(5).unwrap_or(&"1").parse().unwrap_or(1),
+            zobrist_hash: 0,
         };
         let mut rank = 7i32;
         let mut file = 0i32;
@@ -122,7 +185,48 @@ impl Board {
             let r = parts[3].chars().nth(1).unwrap() as u8 - b'1';
             board.en_passant_target = Some(r * 8 + f);
         }
+
+        board.zobrist_hash = board.compute_hash();
         Ok(board)
+    }
+
+    pub fn compute_hash(&self) -> u64 {
+        let z = get_zobrist();
+        let mut h = 0;
+
+        let mut add_pieces = |mut bb: u64, piece_idx: usize| {
+            while bb != 0 {
+                let sq = bb.trailing_zeros() as usize;
+                h ^= z.pieces[piece_idx][sq];
+                bb &= bb - 1;
+            }
+        };
+
+        add_pieces(self.white.pawn, 0);
+        add_pieces(self.white.knight, 1);
+        add_pieces(self.white.bishop, 2);
+        add_pieces(self.white.rook, 3);
+        add_pieces(self.white.queen, 4);
+        add_pieces(self.white.king, 5);
+
+        add_pieces(self.black.pawn, 6);
+        add_pieces(self.black.knight, 7);
+        add_pieces(self.black.bishop, 8);
+        add_pieces(self.black.rook, 9);
+        add_pieces(self.black.queen, 10);
+        add_pieces(self.black.king, 11);
+
+        if !self.white_to_move {
+            h ^= z.side_to_move;
+        }
+
+        h ^= z.castling[self.castling_rights as usize];
+
+        if let Some(sq) = self.en_passant_target {
+            h ^= z.en_passant[(sq % 8) as usize];
+        }
+
+        h
     }
 
     pub fn to_features(&self) -> [f32; 772] {
@@ -134,12 +238,9 @@ impl Board {
 
             while bb != 0 {
                 let sq = bb.trailing_zeros() as usize;
-
                 let mapped_sq = if is_white { sq } else { sq ^ 56 };
-
                 let index = (color_offset + piece_idx) * 64 + mapped_sq;
                 features[index] = 1.0;
-
                 bb &= bb - 1;
             }
         };
@@ -257,6 +358,7 @@ impl Board {
         }
         simple
     }
+
     pub fn to_fen(&self) -> String {
         let mut fen = String::new();
         for rank in (0..8).rev() {
@@ -291,6 +393,7 @@ impl Board {
                 } else {
                     '.'
                 };
+
                 if c == '.' {
                     empty += 1;
                 } else {
@@ -342,6 +445,7 @@ impl Board {
         fen.push_str(&self.fullmove_number.to_string());
         fen
     }
+
     pub fn is_square_attacked(&self, sq: u8, by_white: bool) -> bool {
         let enemy = if by_white { &self.white } else { &self.black };
         let all_occ = self.white.all() | self.black.all();
@@ -372,6 +476,7 @@ impl Board {
         }
         false
     }
+
     pub fn is_in_check(&self, is_white: bool) -> bool {
         let king_bb = if is_white {
             self.white.king
@@ -384,6 +489,7 @@ impl Board {
         let king_sq = king_bb.trailing_zeros() as u8;
         self.is_square_attacked(king_sq, !is_white)
     }
+
     pub fn make_move(&self, m: &Move) -> Board {
         let mut next = self.clone();
         let is_white = self.white_to_move;
@@ -406,6 +512,7 @@ impl Board {
         } else {
             next.halfmove_clock += 1;
         }
+
         if m.from == 4 {
             next.castling_rights &= !0b0011;
         }
@@ -424,14 +531,17 @@ impl Board {
         if m.from == 56 || m.to == 56 {
             next.castling_rights &= !0b1000;
         }
+
         let from_bb = 1u64 << m.from;
         let to_bb = 1u64 << m.to;
         let move_mask = from_bb | to_bb;
+
         let (friendly, enemy) = if is_white {
             (&mut next.white, &mut next.black)
         } else {
             (&mut next.black, &mut next.white)
         };
+
         if m.flag == MoveFlag::Capture
             || m.flag == MoveFlag::PromoCaptureQueen
             || m.flag == MoveFlag::PromoCaptureRook
@@ -447,6 +557,7 @@ impl Board {
             let cap_sq = if is_white { m.to - 8 } else { m.to + 8 };
             enemy.pawn &= !(1u64 << cap_sq);
         }
+
         if (friendly.pawn & from_bb) != 0 {
             friendly.pawn ^= move_mask;
             if m.flag == MoveFlag::PromoQueen || m.flag == MoveFlag::PromoCaptureQueen {
@@ -480,6 +591,7 @@ impl Board {
                 friendly.rook ^= (1u64 << r_from) | (1u64 << r_to);
             }
         }
+
         next.en_passant_target = None;
         if m.flag == MoveFlag::DoublePawnPush {
             next.en_passant_target = Some(if is_white { m.to - 8 } else { m.to + 8 });
@@ -488,13 +600,17 @@ impl Board {
         if !is_white {
             next.fullmove_number += 1;
         }
+
+        next.zobrist_hash = next.compute_hash();
         next
     }
+
     pub fn get_occupancy(&self) -> (u64, u64, u64) {
         let w = self.white.all();
         let b = self.black.all();
         (w, b, w | b)
     }
+
     pub fn generate_legal_moves(&self) -> Vec<Move> {
         let is_white = self.white_to_move;
         let pseudo_moves = self.generate_pseudo_legal_moves();
@@ -507,6 +623,7 @@ impl Board {
         }
         legal_moves
     }
+
     pub fn generate_pseudo_legal_moves(&self) -> Vec<Move> {
         let mut moves = Vec::with_capacity(128);
         let is_white = self.white_to_move;
@@ -536,6 +653,7 @@ impl Board {
         );
         moves
     }
+
     fn generate_pawn_moves(
         &self,
         moves: &mut Vec<Move>,
@@ -601,6 +719,7 @@ impl Board {
             }
         }
     }
+
     fn extract_pawn_moves(
         &self,
         moves: &mut Vec<Move>,
@@ -661,6 +780,7 @@ impl Board {
             bb &= bb - 1;
         }
     }
+
     fn generate_king_moves(
         &self,
         moves: &mut Vec<Move>,
@@ -726,6 +846,7 @@ impl Board {
             }
         }
     }
+
     fn generate_knight_moves(
         &self,
         moves: &mut Vec<Move>,
@@ -741,6 +862,7 @@ impl Board {
             knights &= knights - 1;
         }
     }
+
     fn generate_sliding_moves(
         &self,
         moves: &mut Vec<Move>,
@@ -770,6 +892,7 @@ impl Board {
             temp_rq &= temp_rq - 1;
         }
     }
+
     fn extract_moves(&self, moves: &mut Vec<Move>, mut bb: u64, from: u8, flag: MoveFlag) {
         while bb != 0 {
             let to = bb.trailing_zeros() as u8;
@@ -778,6 +901,7 @@ impl Board {
         }
     }
 }
+
 fn shift_bb(bb: u64, shift: i8) -> u64 {
     if shift > 0 {
         bb << shift
@@ -785,6 +909,7 @@ fn shift_bb(bb: u64, shift: i8) -> u64 {
         bb >> (-shift)
     }
 }
+
 fn knight_attacks(sq: u8) -> u64 {
     let bb = 1u64 << sq;
     let l1 = (bb >> 1) & 0x7f7f7f7f7f7f7f7f;
@@ -800,6 +925,7 @@ fn knight_attacks(sq: u8) -> u64 {
         | (r2 << 8)
         | (r2 >> 8)
 }
+
 fn king_attacks(sq: u8) -> u64 {
     let bb = 1u64 << sq;
     let attacks = shift_bb(bb, 8) | shift_bb(bb, -8);
@@ -813,6 +939,7 @@ fn king_attacks(sq: u8) -> u64 {
         | shift_bb(right, 8)
         | shift_bb(right, -8)
 }
+
 fn get_bishop_attacks(sq: u8, occ: u64) -> u64 {
     let mut attacks = 0;
     let dirs = [7, 9, -7, -9];
@@ -837,6 +964,7 @@ fn get_bishop_attacks(sq: u8, occ: u64) -> u64 {
     }
     attacks
 }
+
 fn get_rook_attacks(sq: u8, occ: u64) -> u64 {
     let mut attacks = 0;
     let dirs = [8, -8, 1, -1];
@@ -861,6 +989,7 @@ fn get_rook_attacks(sq: u8, occ: u64) -> u64 {
     }
     attacks
 }
+
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for rank in (0..8).rev() {
