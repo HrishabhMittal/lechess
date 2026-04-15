@@ -104,8 +104,8 @@ fn evaluate_position(
         }
     }
     if depth == 0 {
-        // return engine_nn.evaluate(&board.to_features());
-        return board.static_eval_color_neutral() as f32;
+        return engine_nn.evaluate(&board.to_features());
+        // return board.static_eval_color_neutral() as f32;
     }
     let mut tt_move: Option<Move> = None;
 
@@ -122,7 +122,33 @@ fn evaluate_position(
             }
         }
     }
+    if depth >= 3 && !board.is_in_check(board.white_to_move) && ply > 0 {
+        let mut null_board = board.clone();
 
+        null_board.white_to_move = !null_board.white_to_move;
+        null_board.en_passant_target = None;
+
+        let z = crate::board::get_zobrist();
+        null_board.zobrist_hash ^= z.side_to_move;
+        if let Some(sq) = board.en_passant_target {
+            null_board.zobrist_hash ^= z.en_passant[(sq % 8) as usize];
+        }
+
+        let null_score = -evaluate_position(
+            &null_board,
+            engine_nn,
+            depth - 1 - 2,
+            ply + 1,
+            -beta,
+            -beta + 1.0,
+            killers,
+            tt_table,
+        );
+
+        if null_score >= beta {
+            return beta;
+        }
+    }
     // let mut scored_moves: Vec<(Move, i32)> = moves
     //     .into_iter()
     //     .map(|m| {
@@ -137,7 +163,7 @@ fn evaluate_position(
         let score_b = score_move(board, b, 0, &killers, tt_move);
         score_b.cmp(&score_a)
     });
-    let mut max_val = f32::NEG_INFINITY;
+    let mut max_val = -50000.0;
     let mut tt_best = None;
     let mut legal_played = 0;
     for m in moves {
@@ -213,9 +239,9 @@ pub fn find_best_move(
     let mut killers: [[Option<Move>; 2]; MAX_PLY] = [[None; 2]; MAX_PLY];
     let mut best_move = moves[0];
     for cur_depth in 1..=depth {
-        let mut max_val = f32::NEG_INFINITY;
-        let mut alpha = f32::NEG_INFINITY;
-        let beta = f32::INFINITY;
+        let mut max_val = -50000.0;
+        let mut alpha = -50000.0;
+        let beta = 50000.0;
         let mut tt_move: Option<Move> = None;
         if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
             tt_move = tt_entry.best_move;
@@ -228,7 +254,7 @@ pub fn find_best_move(
             })
             .collect();
         scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
-        for (m, _) in scored_moves {
+        for (m, _) in scored_moves.iter().take(depth as usize) {
             let next_board = board.make_move(&m);
             let score = -evaluate_position(
                 &next_board,
@@ -242,7 +268,7 @@ pub fn find_best_move(
             );
             if score > max_val {
                 max_val = score;
-                best_move = m;
+                best_move = *m;
             }
             if alpha < score {
                 alpha = score;
