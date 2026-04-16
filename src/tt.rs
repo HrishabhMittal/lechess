@@ -9,7 +9,7 @@ pub enum TTFlag {
 pub struct TTEntry {
     pub hash: u64,
     pub depth: u32,
-    pub score: f32,
+    pub score: i32,
     pub flag: TTFlag,
     pub best_move: Option<Move>,
 }
@@ -38,7 +38,7 @@ impl TranspositionTable {
         &mut self,
         hash: u64,
         depth: u32,
-        score: f32,
+        score: i32,
         flag: TTFlag,
         best_move: Option<Move>,
     ) {

@@ -14,10 +14,10 @@ mod move_list;
 fn main() {
     let engine_nn = NeuralNet::load("models/weights.json");
     let mut board = Board::new();
-    let mut tt_table = TranspositionTable::new(128);
+    let mut tt_table = TranspositionTable::new(256);
     println!("\x1B[H\x1B[2J{}", board);
     let mut line = String::new();
-    let search_depth = 10;
+    let search_depth = 6;
     loop {
         let mut total = 0;
         let start = Instant::now();
@@ -39,7 +39,7 @@ fn main() {
             }
         }
         println!("nodes touched: {}, in time: {:?}", total, start.elapsed());
-        let mut line = String::new();
-        io::stdin().read_line(&mut line).unwrap();
+        // let mut line = String::new();
+        // io::stdin().read_line(&mut line).unwrap();
     }
 }

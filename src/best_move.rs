@@ -1,8 +1,9 @@
 use crate::{
-    board::{Board, Move, MoveFlag},
-    nn::NeuralNet,
+    board::{Board, Move, MoveFlag, UndoState},
+    nn::{Accumulator, NeuralNet},
     tt::{TTFlag, TranspositionTable},
 };
+
 const MAX_PLY: usize = 128;
 
 const MVV_LVA: [[i32; 7]; 7] = [
@@ -89,27 +90,28 @@ fn evaluate_position(
     engine_nn: &NeuralNet,
     mut depth: u32,
     ply: usize,
-    mut alpha: f32,
-    mut beta: f32,
+    mut alpha: i32,
+    mut beta: i32,
     killers: &mut [[Option<Move>; 2]; MAX_PLY],
     tt_table: &mut TranspositionTable,
     total: &mut u32,
-) -> f32 {
+    acc: &Accumulator,
+) -> i32 {
     *total += 1;
     let og_alpha = alpha;
     let mut moves = board.generate_pseudo_legal_moves();
     if moves.is_empty() {
         if board.is_in_check(board.white_to_move) {
-            return -10000.0 - (depth as f32);
+            return -10000 - depth as i32;
         } else {
-            return 0.0;
+            return 0;
         }
     }
     if depth == 0 {
         if board.is_in_check(board.white_to_move) {
             depth += 1;
         } else {
-            return board.static_eval_color_neutral() as f32;
+            return engine_nn.evaluate_from_acc(acc, board.white_to_move);
         }
     }
     let mut tt_move: Option<Move> = None;
@@ -118,10 +120,10 @@ fn evaluate_position(
         tt_move = tt_entry.best_move;
         if tt_entry.depth >= depth {
             let mut tt_score = tt_entry.score;
-            if tt_score > 9000.0 {
-                tt_score -= ply as f32;
-            } else if tt_score < -9000.0 {
-                tt_score += ply as f32;
+            if tt_score > 9000 {
+                tt_score -= ply as i32;
+            } else if tt_score < -9000 {
+                tt_score += ply as i32;
             }
             match tt_entry.flag {
                 TTFlag::Exact => return tt_score,
@@ -151,10 +153,11 @@ fn evaluate_position(
             depth - 1 - 2,
             ply + 1,
             -beta,
-            -beta + 1.0,
+            -beta + 1,
             killers,
             tt_table,
             total,
+            acc,
         );
 
         if null_score >= beta {
@@ -166,16 +169,22 @@ fn evaluate_position(
         let score_b = score_move(board, b, ply, &killers, tt_move);
         score_b.cmp(&score_a)
     });
-    let mut max_val = -50000.0;
+
+    let mut max_val = -50000;
     let mut tt_best = None;
     let mut legal_played = 0;
+
     for m in moves.iter().copied() {
         let undo = board.make_move(&m);
+
         if board.is_in_check(!board.white_to_move) {
             board.unmake_move(&m, &undo);
             continue;
         }
         legal_played += 1;
+        let mut next_acc = *acc;
+        engine_nn.update_from_move(board, &m, &undo, &mut next_acc);
+
         let is_capture = matches!(
             m.flag,
             MoveFlag::Capture
@@ -197,6 +206,7 @@ fn evaluate_position(
                 killers,
                 tt_table,
                 total,
+                &next_acc,
             );
         } else {
             if legal_played > 3
@@ -209,11 +219,12 @@ fn evaluate_position(
                     engine_nn,
                     depth - 2,
                     ply + 1,
-                    -alpha - 1.0,
+                    -alpha - 1,
                     -alpha,
                     killers,
                     tt_table,
                     total,
+                    &next_acc,
                 );
 
                 if score > alpha {
@@ -222,11 +233,12 @@ fn evaluate_position(
                         engine_nn,
                         depth - 1,
                         ply + 1,
-                        -alpha - 1.0,
+                        -alpha - 1,
                         -alpha,
                         killers,
                         tt_table,
                         total,
+                        &next_acc,
                     );
                     if score > alpha && score < beta {
                         score = -evaluate_position(
@@ -239,6 +251,7 @@ fn evaluate_position(
                             killers,
                             tt_table,
                             total,
+                            &next_acc,
                         );
                     }
                 }
@@ -248,11 +261,12 @@ fn evaluate_position(
                     engine_nn,
                     depth - 1,
                     ply + 1,
-                    -alpha - 1.0,
+                    -alpha - 1,
                     -alpha,
                     killers,
                     tt_table,
                     total,
+                    &next_acc,
                 );
                 if score > alpha && score < beta {
                     score = -evaluate_position(
@@ -265,10 +279,12 @@ fn evaluate_position(
                         killers,
                         tt_table,
                         total,
+                        &next_acc,
                     );
                 }
             }
         }
+
         if score > max_val {
             max_val = score;
             tt_best = Some(m);
@@ -299,9 +315,9 @@ fn evaluate_position(
     }
     if legal_played == 0 {
         if board.is_in_check(board.white_to_move) {
-            return -10000.0 + (ply as f32);
+            return -10000 + ply as i32;
         } else {
-            return 0.0;
+            return 0;
         }
     }
     let flag = if max_val <= og_alpha {
@@ -312,10 +328,10 @@ fn evaluate_position(
         TTFlag::Exact
     };
     let mut store_score = max_val;
-    if store_score > 9000.0 {
-        store_score += ply as f32;
-    } else if store_score < -9000.0 {
-        store_score -= ply as f32;
+    if store_score > 9000 {
+        store_score += ply as i32;
+    } else if store_score < -9000 {
+        store_score -= ply as i32;
     }
     tt_table.store(board.zobrist_hash, depth, store_score, flag, tt_best);
     max_val
@@ -332,12 +348,15 @@ pub fn find_best_move(
     if moves.is_empty() {
         return None;
     }
+
+    let acc = engine_nn.refresh_accumulator(board);
+
     let mut killers: [[Option<Move>; 2]; MAX_PLY] = [[None; 2]; MAX_PLY];
     let mut best_move = moves[0];
     for cur_depth in 1..=depth {
-        let mut max_val = -50000.0;
-        let mut alpha = -50000.0;
-        let beta = 50000.0;
+        let mut max_val = -50000;
+        let mut alpha = -50000;
+        let beta = 50000;
         let mut tt_move: Option<Move> = None;
         if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
             tt_move = tt_entry.best_move;
@@ -350,8 +369,13 @@ pub fn find_best_move(
             })
             .collect();
         scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
+
         for (m, _) in scored_moves.iter() {
+            let mut next_acc = acc;
             let undo = board.make_move(&m);
+
+            engine_nn.update_from_move(board, m, &undo, &mut next_acc);
+
             let score = -evaluate_position(
                 board,
                 engine_nn,
@@ -362,7 +386,9 @@ pub fn find_best_move(
                 &mut killers,
                 tt_table,
                 total,
+                &next_acc,
             );
+
             if score > max_val {
                 max_val = score;
                 best_move = *m;

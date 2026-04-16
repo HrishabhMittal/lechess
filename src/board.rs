@@ -238,8 +238,8 @@ impl Board {
         h
     }
 
-    pub fn to_features(&self) -> [f32; 772] {
-        let mut features = [0.0; 772];
+    pub fn to_features(&self) -> [i32; 772] {
+        let mut features = [0; 772];
         let is_white = self.white_to_move;
 
         let mut add_pieces = |mut bb: u64, is_my_piece: bool, piece_idx: usize| {
@@ -249,7 +249,7 @@ impl Board {
                 let sq = bb.trailing_zeros() as usize;
                 let mapped_sq = if is_white { sq } else { sq ^ 56 };
                 let index = (color_offset + piece_idx) * 64 + mapped_sq;
-                features[index] = 1.0;
+                features[index] = 1;
                 bb &= bb - 1;
             }
         };
@@ -277,29 +277,29 @@ impl Board {
 
         if is_white {
             if wk {
-                features[768] = 1.0;
+                features[768] = 1;
             }
             if wq {
-                features[769] = 1.0;
+                features[769] = 1;
             }
             if bk {
-                features[770] = 1.0;
+                features[770] = 1;
             }
             if bq {
-                features[771] = 1.0;
+                features[771] = 1;
             }
         } else {
             if bk {
-                features[768] = 1.0;
+                features[768] = 1;
             }
             if bq {
-                features[769] = 1.0;
+                features[769] = 1;
             }
             if wk {
-                features[770] = 1.0;
+                features[770] = 1;
             }
             if wq {
-                features[771] = 1.0;
+                features[771] = 1;
             }
         }
 

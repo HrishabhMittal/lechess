@@ -5,20 +5,15 @@ import torch.nn as nn
 class ChessNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.fc1 = nn.Linear(772, 256) 
-        self.fc2 = nn.Linear(256, 32)
-        self.fc3 = nn.Linear(32, 32)
-        self.fc4 = nn.Linear(32, 1)
-        self.sigmoid = nn.Sigmoid()
+        self.fc1 = nn.Linear(772, 1024) 
+        self.fc2 = nn.Linear(1024, 128)
+        self.fc3 = nn.Linear(128, 1)
         
     def forward(self, x):
         x = torch.clamp(self.fc1(x), 0.0, 1.0)
         x = torch.clamp(self.fc2(x), 0.0, 1.0)
-        x = torch.clamp(self.fc3(x), 0.0, 1.0)
-        
-        x = self.fc4(x)
-        return self.sigmoid(x)
-
+        x = self.fc3(x)
+        return torch.sigmoid(x)
 if __name__=="__main__":
     data = torch.load("dataset_tensors.pt", weights_only=False) 
     X = data['X']
@@ -55,7 +50,7 @@ if __name__=="__main__":
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
     
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=2, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=2)
     
     epochs = 30 
     

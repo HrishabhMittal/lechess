@@ -1,25 +1,15 @@
 import torch
 import json
-from main import ChessNet
+import numpy as np
 
-model = ChessNet()
-model.load_state_dict(torch.load("chess_model.pth", weights_only=True))
-model.eval()
+def export_quantized(model_path, scale=127):
+    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+    quantized_weights = {}
+    for name, param in checkpoint.items():
+        q_param = (param * scale).round().to(torch.int16)
+        quantized_weights[name] = q_param.numpy().tolist()
+    with open("weights.json", "w") as f:
+        json.dump(quantized_weights, f)
 
-weights = {
-    "fc1_weight": model.fc1.weight.detach().numpy().tolist(),
-    "fc1_bias": model.fc1.bias.detach().numpy().tolist(),
-    
-    "fc2_weight": model.fc2.weight.detach().numpy().tolist(),
-    "fc2_bias": model.fc2.bias.detach().numpy().tolist(),
-    
-    "fc3_weight": model.fc3.weight.detach().numpy().tolist(),
-    "fc3_bias": model.fc3.bias.detach().numpy().tolist(),
-    
-    "fc4_weight": model.fc4.weight.detach().numpy().tolist(),
-    "fc4_bias": model.fc4.bias.detach().numpy().tolist(),
-}
-with open("weights.json", "w") as f:
-    json.dump(weights, f)
-
-print("exported weights.json")
+if __name__ == "__main__":
+    export_quantized("chess_model.pth")
