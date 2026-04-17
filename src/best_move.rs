@@ -40,6 +40,18 @@ fn piece_at(board: &Board, sq: u8) -> usize {
     }
     6
 }
+pub fn build_lmr_table() -> [[u32; 64]; 64] {
+    let mut table = [[0; 64]; 64];
+    for depth in 1..64 {
+        for move_idx in 1..64 {
+            let d = depth as f64;
+            let m = move_idx as f64;
+            let reduction = 0.75 + (d.ln() * m.ln() / 2.25);
+            table[depth][move_idx] = reduction as u32;
+        }
+    }
+    table
+}
 fn pv(board: &mut Board, tt: &TranspositionTable, depth: u32) -> Vec<String> {
     let mut pv = Vec::new();
     let mut out = Vec::new();
@@ -131,7 +143,7 @@ fn qs(
     *total += 1;
 
     let stand_pat = engine_nn.evaluate_from_acc(acc, board.white_to_move);
-
+    // let stand_pat = board.static_eval_color_neutral() * 100;
     if stand_pat >= beta {
         return beta;
     }
@@ -180,6 +192,26 @@ fn qs(
     cap_slice.sort_unstable_by(|a, b| b.1.cmp(&a.1));
 
     for (m, _) in cap_slice.iter() {
+        let is_promo = matches!(m.flag, MoveFlag::PromoQueen | MoveFlag::PromoCaptureQueen);
+        if !is_promo {
+            let victim = if m.flag == MoveFlag::EnPassant {
+                5
+            } else {
+                piece_at(board, m.to)
+            };
+            let victim_val = match victim {
+                1 => 900,
+                2 => 500,
+                3 => 300,
+                4 => 300,
+                5 => 100,
+                _ => 0,
+            };
+
+            if stand_pat + victim_val + 200 < alpha {
+                continue;
+            }
+        }
         let undo = board.make_move(m);
 
         if board.is_in_check(!board.white_to_move) {
@@ -213,6 +245,7 @@ fn evaluate_position(
     mut beta: i32,
     killers: &mut [[Option<Move>; 2]; MAX_PLY],
     history: &mut [[[i32; 64]; 64]; 2],
+    lmr_table: &[[u32; 64]; 64],
     tt_table: &mut TranspositionTable,
     total: &mut u32,
     acc: &Accumulator,
@@ -222,7 +255,7 @@ fn evaluate_position(
     let mut moves = board.generate_pseudo_legal_moves();
     if moves.is_empty() {
         if board.is_in_check(board.white_to_move) {
-            return -10000 - depth as i32;
+            return -10000 + ply as i32;
         } else {
             return 0;
         }
@@ -256,7 +289,18 @@ fn evaluate_position(
             }
         }
     }
-    if depth >= 3 && !board.is_in_check(board.white_to_move) && ply > 0 {
+
+    let static_eval = engine_nn.evaluate_from_acc(acc, board.white_to_move);
+    // let static_eval = board.static_eval_color_neutral() * 100;
+    let in_check = board.is_in_check(board.white_to_move);
+    if depth <= 5 && !in_check && ply > 0 {
+        let rfp_margin = 75 * depth as i32;
+        if static_eval - rfp_margin >= beta {
+            return static_eval;
+        }
+    }
+
+    if depth >= 3 && !board.is_in_check(board.white_to_move) && ply > 0 && static_eval >= beta {
         let mut null_board = board.clone();
 
         null_board.white_to_move = !null_board.white_to_move;
@@ -267,16 +311,18 @@ fn evaluate_position(
         if let Some(sq) = board.en_passant_target {
             null_board.zobrist_hash ^= z.en_passant[(sq % 8) as usize];
         }
-
+        let r = 3 + (depth / 3);
+        let reduced_depth = depth.saturating_sub(1 + r);
         let null_score = -evaluate_position(
             &mut null_board,
             engine_nn,
-            depth - 1 - 2,
+            reduced_depth,
             ply + 1,
             -beta,
             -beta + 1,
             killers,
             history,
+            lmr_table,
             tt_table,
             total,
             acc,
@@ -307,16 +353,40 @@ fn evaluate_position(
         let mut next_acc = *acc;
         engine_nn.update_from_move(board, &m, &undo, &mut next_acc);
 
-        let is_capture = matches!(
+        // let is_capture = matches!(
+        //     m.flag,
+        //     MoveFlag::Capture
+        //         | MoveFlag::EnPassant
+        //         | MoveFlag::PromoCaptureQueen
+        //         | MoveFlag::PromoCaptureRook
+        //         | MoveFlag::PromoCaptureBishop
+        //         | MoveFlag::PromoCaptureKnight
+        // );
+        let is_tactical = matches!(
             m.flag,
             MoveFlag::Capture
                 | MoveFlag::EnPassant
+                | MoveFlag::PromoQueen
+                | MoveFlag::PromoRook
+                | MoveFlag::PromoBishop
+                | MoveFlag::PromoKnight
                 | MoveFlag::PromoCaptureQueen
                 | MoveFlag::PromoCaptureRook
                 | MoveFlag::PromoCaptureBishop
                 | MoveFlag::PromoCaptureKnight
         );
+
+        let gives_check = board.is_in_check(board.white_to_move);
+
+        if depth <= 3 && !in_check && !is_tactical && !gives_check && legal_played > 0 {
+            let futility_margin = 150 * depth as i32;
+            if static_eval + futility_margin <= alpha {
+                board.unmake_move(&m, &undo);
+                continue;
+            }
+        }
         let mut score;
+
         if legal_played == 1 {
             score = -evaluate_position(
                 board,
@@ -327,25 +397,39 @@ fn evaluate_position(
                 -alpha,
                 killers,
                 history,
+                lmr_table,
                 tt_table,
                 total,
                 &next_acc,
             );
         } else {
-            if legal_played > 3
-                && depth >= 3
-                && !is_capture
-                && !board.is_in_check(board.white_to_move)
-            {
+            let mut reduction = 0;
+
+            if depth >= 3 && legal_played > 3 && !is_tactical && !gives_check {
+                let d = (depth as usize).min(63);
+                let m_idx = legal_played.min(63);
+
+                reduction = lmr_table[d][m_idx];
+
+                if killers[ply][0] == Some(m) || killers[ply][1] == Some(m) {
+                    if reduction > 0 {
+                        reduction -= 1;
+                    }
+                }
+            }
+
+            if reduction > 0 {
+                let reduced_depth = (depth - 1).saturating_sub(reduction);
                 score = -evaluate_position(
                     board,
                     engine_nn,
-                    depth - 2,
+                    reduced_depth,
                     ply + 1,
                     -alpha - 1,
                     -alpha,
                     killers,
                     history,
+                    lmr_table,
                     tt_table,
                     total,
                     &next_acc,
@@ -361,25 +445,11 @@ fn evaluate_position(
                         -alpha,
                         killers,
                         history,
+                        lmr_table,
                         tt_table,
                         total,
                         &next_acc,
                     );
-                    if score > alpha && score < beta {
-                        score = -evaluate_position(
-                            board,
-                            engine_nn,
-                            depth - 1,
-                            ply + 1,
-                            -beta,
-                            -alpha,
-                            killers,
-                            history,
-                            tt_table,
-                            total,
-                            &next_acc,
-                        );
-                    }
                 }
             } else {
                 score = -evaluate_position(
@@ -391,27 +461,126 @@ fn evaluate_position(
                     -alpha,
                     killers,
                     history,
+                    lmr_table,
                     tt_table,
                     total,
                     &next_acc,
                 );
-                if score > alpha && score < beta {
-                    score = -evaluate_position(
-                        board,
-                        engine_nn,
-                        depth - 1,
-                        ply + 1,
-                        -beta,
-                        -alpha,
-                        killers,
-                        history,
-                        tt_table,
-                        total,
-                        &next_acc,
-                    );
-                }
+            }
+
+            if score > alpha && score < beta {
+                score = -evaluate_position(
+                    board,
+                    engine_nn,
+                    depth - 1,
+                    ply + 1,
+                    -beta,
+                    -alpha,
+                    killers,
+                    history,
+                    lmr_table,
+                    tt_table,
+                    total,
+                    &next_acc,
+                );
             }
         }
+        //        let mut score;
+        //        if legal_played == 1 {
+        //            score = -evaluate_position(
+        //                board,
+        //                engine_nn,
+        //                depth - 1,
+        //                ply + 1,
+        //                -beta,
+        //                -alpha,
+        //                killers,
+        //                history,
+        //                tt_table,
+        //                total,
+        //                &next_acc,
+        //            );
+        //        } else {
+        //            if legal_played > 3
+        //                && depth >= 3
+        //                && !is_capture
+        //                && !board.is_in_check(board.white_to_move)
+        //            {
+        //                score = -evaluate_position(
+        //                    board,
+        //                    engine_nn,
+        //                    depth - 2,
+        //                    ply + 1,
+        //                    -alpha - 1,
+        //                    -alpha,
+        //                    killers,
+        //                    history,
+        //                    tt_table,
+        //                    total,
+        //                    &next_acc,
+        //                );
+        //
+        //                if score > alpha {
+        //                    score = -evaluate_position(
+        //                        board,
+        //                        engine_nn,
+        //                        depth - 1,
+        //                        ply + 1,
+        //                        -alpha - 1,
+        //                        -alpha,
+        //                        killers,
+        //                        history,
+        //                        tt_table,
+        //                        total,
+        //                        &next_acc,
+        //                    );
+        //                    if score > alpha && score < beta {
+        //                        score = -evaluate_position(
+        //                            board,
+        //                            engine_nn,
+        //                            depth - 1,
+        //                            ply + 1,
+        //                            -beta,
+        //                            -alpha,
+        //                            killers,
+        //                            history,
+        //                            tt_table,
+        //                            total,
+        //                            &next_acc,
+        //                        );
+        //                    }
+        //                }
+        //            } else {
+        //                score = -evaluate_position(
+        //                    board,
+        //                    engine_nn,
+        //                    depth - 1,
+        //                    ply + 1,
+        //                    -alpha - 1,
+        //                    -alpha,
+        //                    killers,
+        //                    history,
+        //                    tt_table,
+        //                    total,
+        //                    &next_acc,
+        //                );
+        //                if score > alpha && score < beta {
+        //                    score = -evaluate_position(
+        //                        board,
+        //                        engine_nn,
+        //                        depth - 1,
+        //                        ply + 1,
+        //                        -beta,
+        //                        -alpha,
+        //                        killers,
+        //                        history,
+        //                        tt_table,
+        //                        total,
+        //                        &next_acc,
+        //                    );
+        //                }
+        //            }
+        //        }
 
         if score > max_val {
             max_val = score;
@@ -436,7 +605,7 @@ fn evaluate_position(
                     killers[ply][0] = Some(m);
                 }
             }
-            let color_idx = if board.white_to_move { 0 } else { 1 };
+            let color_idx = if !board.white_to_move { 0 } else { 1 };
             let bonus = (depth * depth) as i32;
             let entry = &mut history[color_idx][m.from as usize][m.to as usize];
 
@@ -486,8 +655,12 @@ pub fn find_best_move(
 
     let mut killers: [[Option<Move>; 2]; MAX_PLY] = [[None; 2]; MAX_PLY];
     let mut history: [[[i32; 64]; 64]; 2] = [[[0; 64]; 64]; 2];
+
+    let lmr_table = build_lmr_table();
+
     let mut best_move = moves[0];
     let start_time = Instant::now();
+
     for cur_depth in 1..=depth {
         let mut max_val = -50000;
         let mut alpha = -50000;
@@ -520,6 +693,7 @@ pub fn find_best_move(
                 -alpha,
                 &mut killers,
                 &mut history,
+                &lmr_table,
                 tt_table,
                 total,
                 &next_acc,
