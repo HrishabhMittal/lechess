@@ -1,15 +1,14 @@
-use std::{io, time::Instant};
+use std::{fs::OpenOptions, io::Write, time::Instant};
 
 use crate::{board::Board, nn::NeuralNet, tt::TranspositionTable};
 
 mod best_move;
 mod board;
-mod stockfish;
 mod gen_dataset;
-mod nn;
-mod tt;
 mod move_list;
-
+mod nn;
+mod stockfish;
+mod tt;
 
 fn main() {
     let engine_nn = NeuralNet::load("models/weights.json");
@@ -17,13 +16,31 @@ fn main() {
     let mut tt_table = TranspositionTable::new(256);
     println!("\x1B[H\x1B[2J{}", board);
     let mut line = String::new();
-    let search_depth = 6;
+    let search_depth = 20;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("save.txt")
+        .expect("Failed to open save.txt");
     loop {
         let mut total = 0;
         let start = Instant::now();
-        match best_move::find_best_move(&mut board, &engine_nn, search_depth, &mut tt_table, &mut total)
-        {
+        match best_move::find_best_move(
+            &mut board,
+            &engine_nn,
+            search_depth,
+            &mut tt_table,
+            &mut total,
+        ) {
             Some(best_move) => {
+                let san = board.move_to_san(&best_move);
+
+                if board.white_to_move {
+                    write!(file, "{}. {} ", board.fullmove_number, san).unwrap();
+                } else {
+                    write!(file, "{} ", san).unwrap();
+                }
+
                 let _ = board.make_move(&best_move);
                 print!("\x1B[H\x1B[2J");
                 println!("{}", board);
@@ -32,8 +49,10 @@ fn main() {
             None => {
                 if board.is_in_check(board.white_to_move) {
                     println!("checkmate");
+                    writeln!(file, "{}", if board.white_to_move { "0-1" } else { "1-0" }).unwrap();
                 } else {
                     println!("stalemate");
+                    writeln!(file, "1/2-1/2").unwrap();
                 }
                 break;
             }

@@ -114,6 +114,158 @@ impl Board {
     pub fn new() -> Self {
         Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap()
     }
+    pub fn move_to_san(&mut self, m: &Move) -> String {
+        if m.flag == MoveFlag::KingCastle {
+            return self.append_check_suffix("O-O".to_string(), m);
+        } else if m.flag == MoveFlag::QueenCastle {
+            return self.append_check_suffix("O-O-O".to_string(), m);
+        }
+
+        let is_white = self.white_to_move;
+        let from_bb = 1u64 << m.from;
+        let (friendly, enemy) = if is_white {
+            (self.white, self.black)
+        } else {
+            (self.black, self.white)
+        };
+
+        let is_pawn = (friendly.pawn & from_bb) != 0;
+        let is_knight = (friendly.knight & from_bb) != 0;
+        let is_bishop = (friendly.bishop & from_bb) != 0;
+        let is_rook = (friendly.rook & from_bb) != 0;
+        let is_queen = (friendly.queen & from_bb) != 0;
+        let is_king = (friendly.king & from_bb) != 0;
+
+        let piece_char = if is_knight {
+            "N"
+        } else if is_bishop {
+            "B"
+        } else if is_rook {
+            "R"
+        } else if is_queen {
+            "Q"
+        } else if is_king {
+            "K"
+        } else {
+            ""
+        };
+
+        let to_file = (m.to % 8) as u8;
+        let to_rank = (m.to / 8) as u8;
+        let to_sq_str = format!("{}{}", (b'a' + to_file) as char, (b'1' + to_rank) as char);
+
+        let is_capture = m.flag == MoveFlag::Capture
+            || m.flag == MoveFlag::EnPassant
+            || matches!(
+                m.flag,
+                MoveFlag::PromoCaptureQueen
+                    | MoveFlag::PromoCaptureRook
+                    | MoveFlag::PromoCaptureBishop
+                    | MoveFlag::PromoCaptureKnight
+            )
+            || (enemy.all() & (1u64 << m.to)) != 0;
+
+        let mut san = String::new();
+
+        if is_pawn {
+            if is_capture {
+                let from_file = (m.from % 8) as u8;
+                san.push((b'a' + from_file) as char);
+                san.push('x');
+            }
+            san.push_str(&to_sq_str);
+
+            match m.flag {
+                MoveFlag::PromoQueen | MoveFlag::PromoCaptureQueen => san.push_str("=Q"),
+                MoveFlag::PromoRook | MoveFlag::PromoCaptureRook => san.push_str("=R"),
+                MoveFlag::PromoBishop | MoveFlag::PromoCaptureBishop => san.push_str("=B"),
+                MoveFlag::PromoKnight | MoveFlag::PromoCaptureKnight => san.push_str("=N"),
+                _ => {}
+            }
+        } else {
+            san.push_str(piece_char);
+
+            let legal_moves = self.generate_legal_moves();
+            let mut attackers = Vec::new();
+            for l in legal_moves.iter() {
+                if l.to == m.to && l.from != m.from {
+                    let l_from_bb = 1u64 << l.from;
+                    let same_piece = if is_knight {
+                        (friendly.knight & l_from_bb) != 0
+                    } else if is_bishop {
+                        (friendly.bishop & l_from_bb) != 0
+                    } else if is_rook {
+                        (friendly.rook & l_from_bb) != 0
+                    } else if is_queen {
+                        (friendly.queen & l_from_bb) != 0
+                    } else {
+                        false
+                    };
+
+                    if same_piece {
+                        attackers.push(l.from);
+                    }
+                }
+            }
+
+            if !attackers.is_empty() {
+                let from_file = (m.from % 8) as u8;
+                let from_rank = (m.from / 8) as u8;
+
+                let mut same_file = false;
+                let mut same_rank = false;
+
+                for &a in &attackers {
+                    let a_file = (a % 8) as u8;
+                    let a_rank = (a / 8) as u8;
+                    if a_file == from_file {
+                        same_file = true;
+                    }
+                    if a_rank == from_rank {
+                        same_rank = true;
+                    }
+                }
+
+                if !same_file {
+                    san.push((b'a' + from_file) as char);
+                } else if !same_rank {
+                    san.push((b'1' + from_rank) as char);
+                } else {
+                    san.push((b'a' + from_file) as char);
+                    san.push((b'1' + from_rank) as char);
+                }
+            }
+
+            if is_capture {
+                san.push('x');
+            }
+            san.push_str(&to_sq_str);
+        }
+
+        self.append_check_suffix(san, m)
+    }
+
+    fn append_check_suffix(&mut self, mut san: String, m: &Move) -> String {
+        let undo = self.make_move(m);
+        let is_check = self.is_in_check(self.white_to_move);
+        let mut is_mate = false;
+
+        if is_check {
+            let moves = self.generate_legal_moves();
+            if moves.count == 0 {
+                is_mate = true;
+            }
+        }
+
+        self.unmake_move(m, &undo);
+
+        if is_mate {
+            san.push('#');
+        } else if is_check {
+            san.push('+');
+        }
+        san
+    }
     pub fn static_eval_color_neutral(&self) -> i32 {
         if self.white_to_move {
             return self.white.all_sum() - self.black.all_sum();
@@ -509,8 +661,18 @@ impl Board {
             old_hash: self.zobrist_hash,
         };
 
+        let z = get_zobrist();
+        let mut new_hash = self.zobrist_hash;
+
+        new_hash ^= z.side_to_move;
+        new_hash ^= z.castling[self.castling_rights as usize];
+        if let Some(sq) = self.en_passant_target {
+            new_hash ^= z.en_passant[(sq % 8) as usize];
+        }
+
         let to_bb = 1u64 << m.to;
         let enemy = if is_white { &self.black } else { &self.white };
+
         if m.flag == MoveFlag::Capture
             || matches!(
                 m.flag,
@@ -575,48 +737,78 @@ impl Board {
             (&mut self.black, &mut self.white)
         };
 
-        if undo.captured_piece.is_some() {
+        let color_offset = if is_white { 0 } else { 6 };
+        let enemy_offset = if is_white { 6 } else { 0 };
+
+        if let Some(piece_val) = undo.captured_piece {
             enemy.pawn &= !to_bb;
             enemy.knight &= !to_bb;
             enemy.bishop &= !to_bb;
             enemy.rook &= !to_bb;
             enemy.queen &= !to_bb;
+
+            new_hash ^= z.pieces[enemy_offset + (piece_val as usize - 1)][m.to as usize];
         } else if m.flag == MoveFlag::EnPassant {
             let cap_sq = if is_white { m.to - 8 } else { m.to + 8 };
             enemy.pawn &= !(1u64 << cap_sq);
+
+            new_hash ^= z.pieces[enemy_offset + 0][cap_sq as usize];
         }
 
         if (friendly.pawn & from_bb) != 0 {
             friendly.pawn ^= move_mask;
+            new_hash ^= z.pieces[color_offset + 0][m.from as usize];
+
             if m.flag == MoveFlag::PromoQueen || m.flag == MoveFlag::PromoCaptureQueen {
                 friendly.pawn &= !to_bb;
                 friendly.queen |= to_bb;
+                new_hash ^= z.pieces[color_offset + 4][m.to as usize];
             } else if m.flag == MoveFlag::PromoRook || m.flag == MoveFlag::PromoCaptureRook {
                 friendly.pawn &= !to_bb;
                 friendly.rook |= to_bb;
+                new_hash ^= z.pieces[color_offset + 3][m.to as usize];
             } else if m.flag == MoveFlag::PromoBishop || m.flag == MoveFlag::PromoCaptureBishop {
                 friendly.pawn &= !to_bb;
                 friendly.bishop |= to_bb;
+                new_hash ^= z.pieces[color_offset + 2][m.to as usize];
             } else if m.flag == MoveFlag::PromoKnight || m.flag == MoveFlag::PromoCaptureKnight {
                 friendly.pawn &= !to_bb;
                 friendly.knight |= to_bb;
+                new_hash ^= z.pieces[color_offset + 1][m.to as usize];
+            } else {
+                new_hash ^= z.pieces[color_offset + 0][m.to as usize];
             }
         } else if (friendly.knight & from_bb) != 0 {
             friendly.knight ^= move_mask;
+            new_hash ^= z.pieces[color_offset + 1][m.from as usize];
+            new_hash ^= z.pieces[color_offset + 1][m.to as usize];
         } else if (friendly.bishop & from_bb) != 0 {
             friendly.bishop ^= move_mask;
+            new_hash ^= z.pieces[color_offset + 2][m.from as usize];
+            new_hash ^= z.pieces[color_offset + 2][m.to as usize];
         } else if (friendly.rook & from_bb) != 0 {
             friendly.rook ^= move_mask;
+            new_hash ^= z.pieces[color_offset + 3][m.from as usize];
+            new_hash ^= z.pieces[color_offset + 3][m.to as usize];
         } else if (friendly.queen & from_bb) != 0 {
             friendly.queen ^= move_mask;
+            new_hash ^= z.pieces[color_offset + 4][m.from as usize];
+            new_hash ^= z.pieces[color_offset + 4][m.to as usize];
         } else if (friendly.king & from_bb) != 0 {
             friendly.king ^= move_mask;
+            new_hash ^= z.pieces[color_offset + 5][m.from as usize];
+            new_hash ^= z.pieces[color_offset + 5][m.to as usize];
+
             if m.flag == MoveFlag::KingCastle {
                 let (r_from, r_to) = if is_white { (7, 5) } else { (63, 61) };
                 friendly.rook ^= (1u64 << r_from) | (1u64 << r_to);
+                new_hash ^= z.pieces[color_offset + 3][r_from as usize];
+                new_hash ^= z.pieces[color_offset + 3][r_to as usize];
             } else if m.flag == MoveFlag::QueenCastle {
                 let (r_from, r_to) = if is_white { (0, 3) } else { (56, 59) };
                 friendly.rook ^= (1u64 << r_from) | (1u64 << r_to);
+                new_hash ^= z.pieces[color_offset + 3][r_from as usize];
+                new_hash ^= z.pieces[color_offset + 3][r_to as usize];
             }
         }
 
@@ -629,7 +821,12 @@ impl Board {
             self.fullmove_number += 1;
         }
 
-        self.zobrist_hash = self.compute_hash();
+        new_hash ^= z.castling[self.castling_rights as usize];
+        if let Some(sq) = self.en_passant_target {
+            new_hash ^= z.en_passant[(sq % 8) as usize];
+        }
+
+        self.zobrist_hash = new_hash;
 
         undo
     }

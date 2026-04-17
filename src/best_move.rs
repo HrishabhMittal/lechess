@@ -1,5 +1,7 @@
+use std::time::Instant;
+
 use crate::{
-    board::{Board, Move, MoveFlag, UndoState},
+    board::{Board, Move, MoveFlag},
     nn::{Accumulator, NeuralNet},
     tt::{TTFlag, TranspositionTable},
 };
@@ -38,12 +40,37 @@ fn piece_at(board: &Board, sq: u8) -> usize {
     }
     6
 }
+fn pv(board: &mut Board, tt: &TranspositionTable, depth: u32) -> Vec<String> {
+    let mut pv = Vec::new();
+    let mut out = Vec::new();
+    let mut undos = Vec::new();
 
+    for _ in 0..depth {
+        if let Some(entry) = tt.probe(board.zobrist_hash) {
+            if let Some(best_move) = entry.best_move {
+                pv.push(best_move);
+                out.push(board.move_to_san(&best_move));
+                undos.push(board.make_move(&best_move));
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    for (m, undo) in pv.iter().zip(undos.iter()).rev() {
+        board.unmake_move(m, undo);
+    }
+
+    out
+}
 fn score_move(
     board: &Board,
     m: &Move,
     ply: usize,
     killers: &[[Option<Move>; 2]; MAX_PLY],
+    history: &[[[i32; 64]; 64]; 2],
     tt_move: Option<Move>,
 ) -> i32 {
     if Some(*m) == tt_move {
@@ -76,15 +103,107 @@ fn score_move(
         };
         score += MVV_LVA[victim][attacker] + 10000;
     } else if ply < MAX_PLY {
-        if killers[ply][0] == Some(*m) {
-            score += 9000;
-        } else if killers[ply][1] == Some(*m) {
-            score += 8000;
+        let mut killer_matched = false;
+        if ply < MAX_PLY {
+            if killers[ply][0] == Some(*m) {
+                score += 9000;
+                killer_matched = true;
+            } else if killers[ply][1] == Some(*m) {
+                score += 8000;
+                killer_matched = true;
+            }
+        }
+        if !killer_matched {
+            let color_idx = if board.white_to_move { 0 } else { 1 };
+            score += history[color_idx][m.from as usize][m.to as usize];
         }
     }
     score
 }
+fn qs(
+    board: &mut Board,
+    engine_nn: &NeuralNet,
+    mut alpha: i32,
+    beta: i32,
+    total: &mut u32,
+    acc: &Accumulator,
+) -> i32 {
+    *total += 1;
 
+    let stand_pat = engine_nn.evaluate_from_acc(acc, board.white_to_move);
+
+    if stand_pat >= beta {
+        return beta;
+    }
+    if alpha < stand_pat {
+        alpha = stand_pat;
+    }
+
+    let moves = board.generate_pseudo_legal_moves();
+
+    let mut captures = [(
+        Move {
+            from: 0,
+            to: 0,
+            flag: MoveFlag::Quiet,
+        },
+        0i32,
+    ); 256];
+    let mut cap_count = 0;
+
+    for m in moves.iter().copied() {
+        let is_capture = matches!(
+            m.flag,
+            MoveFlag::Capture
+                | MoveFlag::EnPassant
+                | MoveFlag::PromoCaptureQueen
+                | MoveFlag::PromoCaptureRook
+                | MoveFlag::PromoCaptureBishop
+                | MoveFlag::PromoCaptureKnight
+        );
+
+        if is_capture {
+            let attacker = piece_at(board, m.from);
+            let victim = if m.flag == MoveFlag::EnPassant {
+                5
+            } else {
+                piece_at(board, m.to)
+            };
+
+            let score = MVV_LVA[victim][attacker] + 10000;
+            captures[cap_count] = (m, score);
+            cap_count += 1;
+        }
+    }
+
+    let cap_slice = &mut captures[..cap_count];
+    cap_slice.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+    for (m, _) in cap_slice.iter() {
+        let undo = board.make_move(m);
+
+        if board.is_in_check(!board.white_to_move) {
+            board.unmake_move(m, &undo);
+            continue;
+        }
+
+        let mut next_acc = *acc;
+        engine_nn.update_from_move(board, m, &undo, &mut next_acc);
+
+        let score = -qs(board, engine_nn, -beta, -alpha, total, &next_acc);
+
+        board.unmake_move(m, &undo);
+
+        if score >= beta {
+            return beta;
+        }
+        if score > alpha {
+            alpha = score;
+        }
+    }
+
+    alpha
+}
 fn evaluate_position(
     board: &mut Board,
     engine_nn: &NeuralNet,
@@ -93,6 +212,7 @@ fn evaluate_position(
     mut alpha: i32,
     mut beta: i32,
     killers: &mut [[Option<Move>; 2]; MAX_PLY],
+    history: &mut [[[i32; 64]; 64]; 2],
     tt_table: &mut TranspositionTable,
     total: &mut u32,
     acc: &Accumulator,
@@ -111,7 +231,8 @@ fn evaluate_position(
         if board.is_in_check(board.white_to_move) {
             depth += 1;
         } else {
-            return engine_nn.evaluate_from_acc(acc, board.white_to_move);
+            return qs(board, engine_nn, alpha, beta, total, acc);
+            // return engine_nn.evaluate_from_acc(acc, board.white_to_move);
         }
     }
     let mut tt_move: Option<Move> = None;
@@ -155,6 +276,7 @@ fn evaluate_position(
             -beta,
             -beta + 1,
             killers,
+            history,
             tt_table,
             total,
             acc,
@@ -165,8 +287,8 @@ fn evaluate_position(
         }
     }
     moves.sort_unstable_by(|a, b| {
-        let score_a = score_move(board, a, ply, &killers, tt_move);
-        let score_b = score_move(board, b, ply, &killers, tt_move);
+        let score_a = score_move(board, a, ply, &killers, &history, tt_move);
+        let score_b = score_move(board, b, ply, &killers, &history, tt_move);
         score_b.cmp(&score_a)
     });
 
@@ -204,6 +326,7 @@ fn evaluate_position(
                 -beta,
                 -alpha,
                 killers,
+                history,
                 tt_table,
                 total,
                 &next_acc,
@@ -222,6 +345,7 @@ fn evaluate_position(
                     -alpha - 1,
                     -alpha,
                     killers,
+                    history,
                     tt_table,
                     total,
                     &next_acc,
@@ -236,6 +360,7 @@ fn evaluate_position(
                         -alpha - 1,
                         -alpha,
                         killers,
+                        history,
                         tt_table,
                         total,
                         &next_acc,
@@ -249,6 +374,7 @@ fn evaluate_position(
                             -beta,
                             -alpha,
                             killers,
+                            history,
                             tt_table,
                             total,
                             &next_acc,
@@ -264,6 +390,7 @@ fn evaluate_position(
                     -alpha - 1,
                     -alpha,
                     killers,
+                    history,
                     tt_table,
                     total,
                     &next_acc,
@@ -277,6 +404,7 @@ fn evaluate_position(
                         -beta,
                         -alpha,
                         killers,
+                        history,
                         tt_table,
                         total,
                         &next_acc,
@@ -308,6 +436,11 @@ fn evaluate_position(
                     killers[ply][0] = Some(m);
                 }
             }
+            let color_idx = if board.white_to_move { 0 } else { 1 };
+            let bonus = (depth * depth) as i32;
+            let entry = &mut history[color_idx][m.from as usize][m.to as usize];
+
+            *entry = (*entry + bonus).min(7999);
             board.unmake_move(&m, &undo);
             break;
         }
@@ -352,7 +485,9 @@ pub fn find_best_move(
     let acc = engine_nn.refresh_accumulator(board);
 
     let mut killers: [[Option<Move>; 2]; MAX_PLY] = [[None; 2]; MAX_PLY];
+    let mut history: [[[i32; 64]; 64]; 2] = [[[0; 64]; 64]; 2];
     let mut best_move = moves[0];
+    let start_time = Instant::now();
     for cur_depth in 1..=depth {
         let mut max_val = -50000;
         let mut alpha = -50000;
@@ -364,7 +499,7 @@ pub fn find_best_move(
         let mut scored_moves: Vec<(Move, i32)> = moves
             .iter()
             .map(|m| {
-                let score = score_move(board, m, 0, &killers, tt_move);
+                let score = score_move(board, m, 0, &killers, &history, tt_move);
                 (*m, score)
             })
             .collect();
@@ -384,6 +519,7 @@ pub fn find_best_move(
                 -beta,
                 -alpha,
                 &mut killers,
+                &mut history,
                 tt_table,
                 total,
                 &next_acc,
@@ -404,6 +540,31 @@ pub fn find_best_move(
             max_val,
             TTFlag::Exact,
             Some(best_move),
+        );
+        let elapsed_ms = start_time.elapsed().as_millis().max(1);
+        let nps = (*total as u128 * 1000) / elapsed_ms;
+
+        let score_string = if max_val > 9000 {
+            let moves_to_mate = (10000 - max_val + 1) / 2;
+            format!("mate {}", moves_to_mate)
+        } else if max_val < -9000 {
+            let moves_to_mate = (-10000 - max_val) / 2;
+            format!("mate {}", moves_to_mate)
+        } else {
+            format!("cp {}", max_val)
+        };
+
+        let pv_moves = pv(board, tt_table, cur_depth);
+
+        let pv_string = pv_moves
+            .iter()
+            .map(|m| format!("{}", m))
+            .collect::<Vec<String>>()
+            .join(" ");
+
+        println!(
+            "info depth {} score {} nodes {} nps {} time {} pv {}",
+            cur_depth, score_string, *total, nps, elapsed_ms, pv_string
         );
     }
     Some(best_move)
