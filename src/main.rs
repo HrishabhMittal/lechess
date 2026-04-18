@@ -16,7 +16,7 @@ fn main() {
     let mut tt_table = TranspositionTable::new(256);
     println!("\x1B[H\x1B[2J{}", board);
     let mut line = String::new();
-    let search_depth = 10;
+    let search_depth = 15;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)

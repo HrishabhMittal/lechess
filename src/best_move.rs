@@ -253,6 +253,7 @@ fn evaluate_position(
     *total += 1;
     let og_alpha = alpha;
     let mut moves = board.generate_pseudo_legal_moves();
+
     if moves.is_empty() {
         if board.is_in_check(board.white_to_move) {
             return -10000 + ply as i32;
@@ -260,14 +261,15 @@ fn evaluate_position(
             return 0;
         }
     }
+
     if depth == 0 {
         if board.is_in_check(board.white_to_move) {
             depth += 1;
         } else {
             return qs(board, engine_nn, alpha, beta, total, acc);
-            // return engine_nn.evaluate_from_acc(acc, board.white_to_move);
         }
     }
+
     let mut tt_move: Option<Move> = None;
 
     if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
@@ -291,8 +293,8 @@ fn evaluate_position(
     }
 
     let static_eval = engine_nn.evaluate_from_acc(acc, board.white_to_move);
-    // let static_eval = board.static_eval_color_neutral() * 100;
     let in_check = board.is_in_check(board.white_to_move);
+
     if depth <= 5 && !in_check && ply > 0 {
         let rfp_margin = 75 * depth as i32;
         if static_eval - rfp_margin >= beta {
@@ -300,7 +302,7 @@ fn evaluate_position(
         }
     }
 
-    if depth >= 3 && !board.is_in_check(board.white_to_move) && ply > 0 && static_eval >= beta {
+    if depth >= 3 && !in_check && ply > 0 && static_eval >= beta {
         let mut null_board = board.clone();
 
         null_board.white_to_move = !null_board.white_to_move;
@@ -332,6 +334,7 @@ fn evaluate_position(
             return beta;
         }
     }
+
     moves.sort_unstable_by(|a, b| {
         let score_a = score_move(board, a, ply, &killers, &history, tt_move);
         let score_b = score_move(board, b, ply, &killers, &history, tt_move);
@@ -349,19 +352,11 @@ fn evaluate_position(
             board.unmake_move(&m, &undo);
             continue;
         }
+
         legal_played += 1;
         let mut next_acc = *acc;
         engine_nn.update_from_move(board, &m, &undo, &mut next_acc);
 
-        // let is_capture = matches!(
-        //     m.flag,
-        //     MoveFlag::Capture
-        //         | MoveFlag::EnPassant
-        //         | MoveFlag::PromoCaptureQueen
-        //         | MoveFlag::PromoCaptureRook
-        //         | MoveFlag::PromoCaptureBishop
-        //         | MoveFlag::PromoCaptureKnight
-        // );
         let is_tactical = matches!(
             m.flag,
             MoveFlag::Capture
@@ -378,13 +373,14 @@ fn evaluate_position(
 
         let gives_check = board.is_in_check(board.white_to_move);
 
-        if depth <= 3 && !in_check && !is_tactical && !gives_check && legal_played > 0 {
+        if depth <= 3 && !in_check && !is_tactical && !gives_check && legal_played > 1 {
             let futility_margin = 150 * depth as i32;
             if static_eval + futility_margin <= alpha {
                 board.unmake_move(&m, &undo);
                 continue;
             }
         }
+
         let mut score;
 
         if legal_played == 1 {
@@ -485,102 +481,6 @@ fn evaluate_position(
                 );
             }
         }
-        //        let mut score;
-        //        if legal_played == 1 {
-        //            score = -evaluate_position(
-        //                board,
-        //                engine_nn,
-        //                depth - 1,
-        //                ply + 1,
-        //                -beta,
-        //                -alpha,
-        //                killers,
-        //                history,
-        //                tt_table,
-        //                total,
-        //                &next_acc,
-        //            );
-        //        } else {
-        //            if legal_played > 3
-        //                && depth >= 3
-        //                && !is_capture
-        //                && !board.is_in_check(board.white_to_move)
-        //            {
-        //                score = -evaluate_position(
-        //                    board,
-        //                    engine_nn,
-        //                    depth - 2,
-        //                    ply + 1,
-        //                    -alpha - 1,
-        //                    -alpha,
-        //                    killers,
-        //                    history,
-        //                    tt_table,
-        //                    total,
-        //                    &next_acc,
-        //                );
-        //
-        //                if score > alpha {
-        //                    score = -evaluate_position(
-        //                        board,
-        //                        engine_nn,
-        //                        depth - 1,
-        //                        ply + 1,
-        //                        -alpha - 1,
-        //                        -alpha,
-        //                        killers,
-        //                        history,
-        //                        tt_table,
-        //                        total,
-        //                        &next_acc,
-        //                    );
-        //                    if score > alpha && score < beta {
-        //                        score = -evaluate_position(
-        //                            board,
-        //                            engine_nn,
-        //                            depth - 1,
-        //                            ply + 1,
-        //                            -beta,
-        //                            -alpha,
-        //                            killers,
-        //                            history,
-        //                            tt_table,
-        //                            total,
-        //                            &next_acc,
-        //                        );
-        //                    }
-        //                }
-        //            } else {
-        //                score = -evaluate_position(
-        //                    board,
-        //                    engine_nn,
-        //                    depth - 1,
-        //                    ply + 1,
-        //                    -alpha - 1,
-        //                    -alpha,
-        //                    killers,
-        //                    history,
-        //                    tt_table,
-        //                    total,
-        //                    &next_acc,
-        //                );
-        //                if score > alpha && score < beta {
-        //                    score = -evaluate_position(
-        //                        board,
-        //                        engine_nn,
-        //                        depth - 1,
-        //                        ply + 1,
-        //                        -beta,
-        //                        -alpha,
-        //                        killers,
-        //                        history,
-        //                        tt_table,
-        //                        total,
-        //                        &next_acc,
-        //                    );
-        //                }
-        //            }
-        //        }
 
         if score > max_val {
             max_val = score;
@@ -615,6 +515,7 @@ fn evaluate_position(
         }
         board.unmake_move(&m, &undo);
     }
+
     if legal_played == 0 {
         if board.is_in_check(board.white_to_move) {
             return -10000 + ply as i32;
@@ -622,6 +523,7 @@ fn evaluate_position(
             return 0;
         }
     }
+
     let flag = if max_val <= og_alpha {
         TTFlag::UpperBound
     } else if max_val >= beta {
@@ -629,6 +531,7 @@ fn evaluate_position(
     } else {
         TTFlag::Exact
     };
+
     let mut store_score = max_val;
     if store_score > 9000 {
         store_score += ply as i32;
@@ -636,6 +539,7 @@ fn evaluate_position(
         store_score -= ply as i32;
     }
     tt_table.store(board.zobrist_hash, depth, store_score, flag, tt_best);
+
     max_val
 }
 

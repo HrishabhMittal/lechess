@@ -1,5 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+
+use crate::board::Move;
 pub struct Stockfish {
     process: Child,
     stdin: ChildStdin,
@@ -55,6 +57,40 @@ impl Stockfish {
                     }
                 }
             } else if text.starts_with("bestmove") {
+                break;
+            }
+        }
+        let is_black_turn = fen.split_whitespace().nth(1).unwrap_or("w") == "b";
+        if is_black_turn {
+            -final_score
+        } else {
+            final_score
+        }
+    }
+    pub fn get_best_move(&mut self, fen: &str, depth: u8) -> i32 {
+        writeln!(self.stdin, "position fen {}", fen).unwrap();
+        writeln!(self.stdin, "go depth {}", depth).unwrap();
+        let mut final_score = 0;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            self.reader.read_line(&mut line).unwrap();
+            let text = line.trim();
+            if text.starts_with("info") {
+                let tokens: Vec<&str> = text.split_whitespace().collect();
+                if let Some(score_idx) = tokens.iter().position(|&x| x == "score") {
+                    if tokens.len() > score_idx + 2 {
+                        let score_type = tokens[score_idx + 1];
+                        let score_val = tokens[score_idx + 2].parse::<i32>().unwrap_or(0);
+                        if score_type == "cp" {
+                            final_score = score_val;
+                        } else if score_type == "mate" {
+                            final_score = if score_val > 0 { 8500 } else { -8500 };
+                        }
+                    }
+                }
+            } else if text.starts_with("bestmove") {
+                let tokens: Vec<&str> = text.split_whitespace().collect();
                 break;
             }
         }
