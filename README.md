@@ -16,6 +16,7 @@ cargo build --release
 
 # Demo
 Here is a [game](https://lichess.org/5lp5zKLE) played by the engine at depth 10.
+And this is another [game](https://lichess.org/vWJpGn5Q) which is slightly less interesting but also pretty high level.
 It usually averages between 15-30 centipawn loss per move, and can see pretty interesting moves as shown in the above game.
 
 # TODO
