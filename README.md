@@ -4,7 +4,7 @@ This chess engine distills stockfish using simple linear models. The idea of thi
 After distilling stockfish, we make the model play against itself, and using some RL, hopefully bring it to super GM level.
 
 The dataset for training was custom and prepared using code, to generate random postions.
-Now, the model has switched to ![This dataset](https://www.kaggle.com/datasets/jantyc/lichess-evaluation-dataset)
+Now, the model has switched to [this dataset](https://www.kaggle.com/datasets/jantyc/lichess-evaluation-dataset)
 
 # How to use
 
@@ -15,7 +15,7 @@ cargo build --release
 ```
 
 # Demo
-Here is a ![game](https://lichess.org/5lp5zKLE) played by the engine at depth 10.
+Here is a [game](https://lichess.org/5lp5zKLE) played by the engine at depth 10.
 It usually averages between 15-30 centipawn loss per move, and can see pretty interesting moves as shown in the above game.
 
 # TODO
