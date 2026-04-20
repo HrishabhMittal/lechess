@@ -18,6 +18,7 @@ mod move_list;
 mod nn;
 mod stockfish;
 mod tt;
+mod uci;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -42,6 +43,9 @@ struct Args {
 
     #[arg(long, default_value_t = String::from("dataset.csv"))]
     dataset_file: String,
+
+    #[arg(long, short, default_value_t = String::from("models/weights.json"))]
+    weights_file: String,
 
     #[arg(long, short, default_value_t = false)]
     record: bool,
@@ -121,8 +125,8 @@ fn record_to_file(file: &mut Option<File>, board: &mut Board, b_move: Option<Mov
         }
     }
 }
-fn play_self(depth: u32, record: bool, file_name: String) {
-    let engine_nn = NeuralNet::load("models/weights.json");
+fn play_self(depth: u32, record: bool, file_name: String, weights: String) {
+    let engine_nn = NeuralNet::load(&weights);
     let mut board = Board::new();
     let mut tt_table = TranspositionTable::new(256);
     println!("\x1B[H\x1B[2J{}", board);
@@ -145,8 +149,8 @@ fn play_self(depth: u32, record: bool, file_name: String) {
     }
 }
 
-fn play_stockfish(depth: u32, as_white: bool, record: bool, file_name: String) {
-    let engine_nn = NeuralNet::load("models/weights.json");
+fn play_stockfish(depth: u32, as_white: bool, record: bool, file_name: String, weights: String) {
+    let engine_nn = NeuralNet::load(&weights);
     let mut stockfish = Stockfish::new(None);
     let mut board = Board::new();
     let mut tt_table = TranspositionTable::new(256);
@@ -186,9 +190,9 @@ fn play_stockfish(depth: u32, as_white: bool, record: bool, file_name: String) {
 fn main() {
     let args = Args::parse();
     if args.self_play {
-        play_self(args.depth, args.record, args.record_file);
+        play_self(args.depth, args.record, args.record_file, args.weights_file);
     } else if args.play_stockfish {
-        play_stockfish(args.depth, !args.as_black, args.record, args.record_file);
+        play_stockfish(args.depth, !args.as_black, args.record, args.record_file, args.weights_file);
     } else if args.gen_dataset {
         gen_dataset(
             gen_dataset::Encoding::Fen,
@@ -198,6 +202,6 @@ fn main() {
             args.dataset_file,
         );
     } else {
-        println!("Specify what you want...\n-h or --help for help");
+        uci::uci();
     }
 }

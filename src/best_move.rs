@@ -18,6 +18,26 @@ const MVV_LVA: [[i32; 7]; 7] = [
     [0, 0, 0, 0, 0, 0, 0],
 ];
 
+fn move_to_uci(m: &Move) -> String {
+    let from_file = (m.from % 8) as u8;
+    let from_rank = (m.from / 8) as u8;
+    let to_file = (m.to % 8) as u8;
+    let to_rank = (m.to / 8) as u8;
+    let from_str = format!(
+        "{}{}",
+        (b'a' + from_file) as char,
+        (b'1' + from_rank) as char
+    );
+    let to_str = format!("{}{}", (b'a' + to_file) as char, (b'1' + to_rank) as char);
+    let promo = match m.flag {
+        MoveFlag::PromoQueen | MoveFlag::PromoCaptureQueen => "q",
+        MoveFlag::PromoRook | MoveFlag::PromoCaptureRook => "r",
+        MoveFlag::PromoBishop | MoveFlag::PromoCaptureBishop => "b",
+        MoveFlag::PromoKnight | MoveFlag::PromoCaptureKnight => "n",
+        _ => "",
+    };
+    format!("{}{}{}", from_str, to_str, promo)
+}
 fn piece_at(board: &Board, sq: u8) -> usize {
     let bb = 1u64 << sq;
     if (board.white.queen | board.black.queen) & bb != 0 {
@@ -61,7 +81,8 @@ fn pv(board: &mut Board, tt: &TranspositionTable, depth: u32) -> Vec<String> {
         if let Some(entry) = tt.probe(board.zobrist_hash) {
             if let Some(best_move) = entry.best_move {
                 pv.push(best_move);
-                out.push(board.move_to_san(&best_move));
+                out.push(move_to_uci(&best_move));
+                // out.push(board.move_to_san(&best_move));
                 undos.push(board.make_move(&best_move));
             } else {
                 break;

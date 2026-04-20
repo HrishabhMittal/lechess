@@ -3,5 +3,6 @@ dataset
 __pycache__
 *.pt
 *.pth
+*.epd
 weights.json
 save.txt
