@@ -1,5 +1,5 @@
-# Le Chess
-Le chess engine.
+# Duchess
+
 This chess engine uses most of the more known chess optimisations, along with a neural network to evaluate positions.
 After training it sufficiently on a dataset, we make the model play against itself, and using some RL, hopefully bring it to super GM level.
 
