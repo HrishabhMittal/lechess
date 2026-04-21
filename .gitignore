@@ -4,5 +4,6 @@ __pycache__
 *.pt
 *.pth
 *.epd
+*.msgpack
 weights.json
-save.txt
+/*.txt

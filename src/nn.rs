@@ -1,5 +1,6 @@
 use crate::board::{Board, Move, MoveFlag, UndoState};
 use serde::Deserialize;
+use rmp_serde::from_read;
 use std::{fs::File, io::BufReader};
 fn piece_on_sq(board: &Board, sq: u8) -> Option<(bool, usize)> {
     let bb = 1u64 << sq;
@@ -55,11 +56,15 @@ pub struct Weights {
     fc3_w: Vec<Vec<i16>>,
     #[serde(rename = "fc3.bias")]
     fc3_b: Vec<i16>,
+    #[serde(rename = "fc4.weight")]
+    fc4_w: Vec<Vec<i16>>,
+    #[serde(rename = "fc4.bias")]
+    fc4_b: Vec<i16>,
 }
 #[derive(Clone, Copy)]
 pub struct Accumulator {
-    pub white: [i16; 256],
-    pub black: [i16; 256],
+    pub white: [i16; 512],
+    pub black: [i16; 512],
 }
 pub struct NeuralNet {
     fc1_w_transposed: Box<[i16]>,
@@ -68,28 +73,36 @@ pub struct NeuralNet {
     fc2_b: Box<[i16]>,
     fc3_w: Box<[i16]>,
     fc3_b: Box<[i16]>,
+    fc4_w: Box<[i16]>,
+    fc4_b: Box<[i16]>,
     scale: i32,
 }
 impl NeuralNet {
     pub fn load(path: &str) -> Self {
         let file = File::open(path).expect("couldnt open weights");
         let reader = BufReader::new(file);
-        let weights: Weights = serde_json::from_reader(reader).expect("couldnt parse weights");
-        let mut fc1_w_transposed = vec![0i16; 45056 * 256];
-        for i in 0..256 {
+        let weights: Weights = from_read(reader).expect("couldnt parse weights");
+        let mut fc1_w_transposed = vec![0i16; 45056 * 512];
+        for i in 0..512 {
             for j in 0..45056 {
-                fc1_w_transposed[j * 256 + i] = weights.fc1_w[i][j];
+                fc1_w_transposed[j * 512 + i] = weights.fc1_w[i][j];
             }
         }
-        let mut fc2_w = vec![0i16; 32 * 256];
+        let mut fc2_w = vec![0i16; 32 * 512];
         for i in 0..32 {
-            for j in 0..256 {
-                fc2_w[i * 256 + j] = weights.fc2_w[i][j];
+            for j in 0..512 {
+                fc2_w[i * 512 + j] = weights.fc2_w[i][j];
             }
         }
-        let mut fc3_w = vec![0i16; 32];
+        let mut fc3_w = vec![0i16; 32 * 32];
         for i in 0..32 {
-            fc3_w[i] = weights.fc3_w[0][i];
+            for j in 0..32 {
+                fc3_w[i * 32 + j] = weights.fc3_w[i][j];
+            }
+        }
+        let mut fc4_w = vec![0i16; 32];
+        for i in 0..32 {
+            fc4_w[i] = weights.fc4_w[0][i];
         }
         NeuralNet {
             fc1_w_transposed: fc1_w_transposed.into_boxed_slice(),
@@ -98,13 +111,15 @@ impl NeuralNet {
             fc2_b: weights.fc2_b.into_boxed_slice(),
             fc3_w: fc3_w.into_boxed_slice(),
             fc3_b: weights.fc3_b.into_boxed_slice(),
+            fc4_w: fc4_w.into_boxed_slice(),
+            fc4_b: weights.fc4_b.into_boxed_slice(),
             scale: 127,
         }
     }
     #[inline(always)]
     fn add_to_white(
         &self,
-        acc: &mut [i16; 256],
+        acc: &mut [i16; 512],
         w_king_sq: usize,
         sq: usize,
         piece_idx: usize,
@@ -116,7 +131,7 @@ impl NeuralNet {
             piece_idx + 5
         };
         let idx = w_king_sq * 704 + p_idx * 64 + sq;
-        let weights = &self.fc1_w_transposed[idx * 256..(idx + 1) * 256];
+        let weights = &self.fc1_w_transposed[idx * 512..(idx + 1) * 512];
         for (a, &w) in acc.iter_mut().zip(weights) {
             *a += w;
         }
@@ -124,7 +139,7 @@ impl NeuralNet {
     #[inline(always)]
     fn sub_from_white(
         &self,
-        acc: &mut [i16; 256],
+        acc: &mut [i16; 512],
         w_king_sq: usize,
         sq: usize,
         piece_idx: usize,
@@ -136,7 +151,7 @@ impl NeuralNet {
             piece_idx + 5
         };
         let idx = w_king_sq * 704 + p_idx * 64 + sq;
-        let weights = &self.fc1_w_transposed[idx * 256..(idx + 1) * 256];
+        let weights = &self.fc1_w_transposed[idx * 512..(idx + 1) * 512];
         for (a, &w) in acc.iter_mut().zip(weights) {
             *a -= w;
         }
@@ -144,7 +159,7 @@ impl NeuralNet {
     #[inline(always)]
     fn add_to_black(
         &self,
-        acc: &mut [i16; 256],
+        acc: &mut [i16; 512],
         b_king_sq: usize,
         sq: usize,
         piece_idx: usize,
@@ -158,7 +173,7 @@ impl NeuralNet {
         let b_king_mapped = b_king_sq ^ 56;
         let sq_mapped = sq ^ 56;
         let idx = b_king_mapped * 704 + p_idx * 64 + sq_mapped;
-        let weights = &self.fc1_w_transposed[idx * 256..(idx + 1) * 256];
+        let weights = &self.fc1_w_transposed[idx * 512..(idx + 1) * 512];
         for (a, &w) in acc.iter_mut().zip(weights) {
             *a += w;
         }
@@ -166,7 +181,7 @@ impl NeuralNet {
     #[inline(always)]
     fn sub_from_black(
         &self,
-        acc: &mut [i16; 256],
+        acc: &mut [i16; 512],
         b_king_sq: usize,
         sq: usize,
         piece_idx: usize,
@@ -180,12 +195,12 @@ impl NeuralNet {
         let b_king_mapped = b_king_sq ^ 56;
         let sq_mapped = sq ^ 56;
         let idx = b_king_mapped * 704 + p_idx * 64 + sq_mapped;
-        let weights = &self.fc1_w_transposed[idx * 256..(idx + 1) * 256];
+        let weights = &self.fc1_w_transposed[idx * 512..(idx + 1) * 512];
         for (a, &w) in acc.iter_mut().zip(weights) {
             *a -= w;
         }
     }
-    fn refresh_white_acc(&self, board: &Board, white_acc: &mut [i16; 256]) {
+    fn refresh_white_acc(&self, board: &Board, white_acc: &mut [i16; 512]) {
         white_acc.copy_from_slice(&self.fc1_b);
         let w_king_sq = board.white.king.trailing_zeros() as usize;
         let mut add_pieces = |mut bb: u64, is_white_piece: bool, piece_idx: usize| {
@@ -209,7 +224,7 @@ impl NeuralNet {
         add_pieces(board.black.queen, false, 4);
         add_pieces(board.black.king, false, 5);
     }
-    fn refresh_black_acc(&self, board: &Board, black_acc: &mut [i16; 256]) {
+    fn refresh_black_acc(&self, board: &Board, black_acc: &mut [i16; 512]) {
         black_acc.copy_from_slice(&self.fc1_b);
         let b_king_sq = board.black.king.trailing_zeros() as usize;
         let mut add_pieces = |mut bb: u64, is_white_piece: bool, piece_idx: usize| {
@@ -235,8 +250,8 @@ impl NeuralNet {
     }
     pub fn refresh_accumulator(&self, board: &Board) -> Accumulator {
         let mut acc = Accumulator {
-            white: [0; 256],
-            black: [0; 256],
+            white: [0; 512],
+            black: [0; 512],
         };
         self.refresh_white_acc(board, &mut acc.white);
         self.refresh_black_acc(board, &mut acc.black);
@@ -330,14 +345,14 @@ impl NeuralNet {
         } else {
             &acc.black
         };
-        let mut l1 = [0i16; 256];
+        let mut l1 = [0i16; 512];
         l1.iter_mut()
             .zip(active_acc.iter())
             .for_each(|(out, &inp)| {
                 *out = (inp as i32).clamp(0, self.scale) as i16;
             });
         let mut l2 = [0i16; 32];
-        for (i, weight_row) in self.fc2_w.chunks_exact(256).enumerate() {
+        for (i, weight_row) in self.fc2_w.chunks_exact(512).enumerate() {
             let dot_product: i32 = l1
                 .iter()
                 .zip(weight_row.iter())
@@ -346,12 +361,22 @@ impl NeuralNet {
             let sum = (self.fc2_b[i] as i32) * self.scale + dot_product;
             l2[i] = (sum / self.scale).clamp(0, self.scale) as i16;
         }
-        let dot_product: i32 = l2
+        let mut l3 = [0i16; 32];
+        for (i, weight_row) in self.fc3_w.chunks_exact(32).enumerate() {
+            let dot_product: i32 = l2
+                .iter()
+                .zip(weight_row.iter())
+                .map(|(&a, &w)| (a as i32) * (w as i32))
+                .sum();
+            let sum = (self.fc3_b[i] as i32) * self.scale + dot_product;
+            l3[i] = (sum / self.scale).clamp(0, self.scale) as i16;
+        }
+        let dot_product: i32 = l3
             .iter()
-            .zip(self.fc3_w.iter())
+            .zip(self.fc4_w.iter())
             .map(|(&a, &w)| (a as i32) * (w as i32))
             .sum();
-        let output = (self.fc3_b[0] as i32) * self.scale + dot_product;
+        let output = (self.fc4_b[0] as i32) * self.scale + dot_product;
         (output * 400) / (self.scale * self.scale)
     }
 }

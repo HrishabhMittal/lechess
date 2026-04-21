@@ -86,7 +86,7 @@ fn parse_position(board: &mut Board, tokens: &[&str]) {
     }
 }
 pub fn uci() {
-    let engine_nn = NeuralNet::load("models/weights.json");
+    let engine_nn = NeuralNet::load("models/weights.msgpack");
     let mut tt_table = TranspositionTable::new(256);
     let mut board = Board::new();
     let stdin = io::stdin();
@@ -120,6 +120,7 @@ pub fn uci() {
                     depth,
                     &mut tt_table,
                     &mut total,
+                    true,
                 ) {
                     println!("bestmove {}", move_to_uci(&best_move));
                 } else {

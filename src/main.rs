@@ -44,7 +44,7 @@ struct Args {
     #[arg(long, default_value_t = String::from("dataset.csv"))]
     dataset_file: String,
 
-    #[arg(long, short, default_value_t = String::from("models/weights.json"))]
+    #[arg(long, short, default_value_t = String::from("models/weights.msgpack"))]
     weights_file: String,
 
     #[arg(long, short, default_value_t = false)]
@@ -61,7 +61,7 @@ fn make_move(
     file: &mut Option<File>,
 ) -> bool {
     let mut total = 0;
-    match best_move::find_best_move(board, engine_nn, depth, tt_table, &mut total) {
+    match best_move::find_best_move(board, engine_nn, depth, tt_table, &mut total, true) {
         Some(best_move) => {
             record_to_file(file, board, Some(best_move));
             let _ = board.make_move(&best_move);
@@ -192,14 +192,21 @@ fn main() {
     if args.self_play {
         play_self(args.depth, args.record, args.record_file, args.weights_file);
     } else if args.play_stockfish {
-        play_stockfish(args.depth, !args.as_black, args.record, args.record_file, args.weights_file);
+        play_stockfish(
+            args.depth,
+            !args.as_black,
+            args.record,
+            args.record_file,
+            args.weights_file,
+        );
     } else if args.gen_dataset {
         gen_dataset(
-            gen_dataset::Encoding::Fen,
+            None,
             None,
             args.data_size,
             args.depth as u8,
             args.dataset_file,
+            args.weights_file,
         );
     } else {
         uci::uci();

@@ -570,6 +570,7 @@ pub fn find_best_move(
     depth: u32,
     tt_table: &mut TranspositionTable,
     total: &mut u32,
+    verbose: bool,
 ) -> Option<Move> {
     let moves = board.generate_legal_moves();
     if moves.is_empty() {
@@ -640,31 +641,33 @@ pub fn find_best_move(
             TTFlag::Exact,
             Some(best_move),
         );
-        let elapsed_ms = start_time.elapsed().as_millis().max(1);
-        let nps = (*total as u128 * 1000) / elapsed_ms;
+        if verbose {
+            let elapsed_ms = start_time.elapsed().as_millis().max(1);
+            let nps = (*total as u128 * 1000) / elapsed_ms;
 
-        let score_string = if max_val > 9000 {
-            let moves_to_mate = (10000 - max_val + 1) / 2;
-            format!("mate {}", moves_to_mate)
-        } else if max_val < -9000 {
-            let moves_to_mate = (-10000 - max_val) / 2;
-            format!("mate {}", moves_to_mate)
-        } else {
-            format!("cp {}", max_val)
-        };
+            let score_string = if max_val > 9000 {
+                let moves_to_mate = (10000 - max_val + 1) / 2;
+                format!("mate {}", moves_to_mate)
+            } else if max_val < -9000 {
+                let moves_to_mate = (-10000 - max_val) / 2;
+                format!("mate {}", moves_to_mate)
+            } else {
+                format!("cp {}", max_val)
+            };
 
-        let pv_moves = pv(board, tt_table, cur_depth);
+            let pv_moves = pv(board, tt_table, cur_depth);
 
-        let pv_string = pv_moves
-            .iter()
-            .map(|m| format!("{}", m))
-            .collect::<Vec<String>>()
-            .join(" ");
+            let pv_string = pv_moves
+                .iter()
+                .map(|m| format!("{}", m))
+                .collect::<Vec<String>>()
+                .join(" ");
 
-        println!(
-            "info depth {} score {} nodes {} nps {} time {} pv {}",
-            cur_depth, score_string, *total, nps, elapsed_ms, pv_string
-        );
+            println!(
+                "info depth {} score {} nodes {} nps {} time {} pv {}",
+                cur_depth, score_string, *total, nps, elapsed_ms, pv_string
+            );
+        }
     }
     Some(best_move)
 }
