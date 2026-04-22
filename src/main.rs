@@ -44,6 +44,9 @@ struct Args {
     #[arg(long, default_value_t = String::from("dataset.csv"))]
     dataset_file: String,
 
+    #[arg(long, default_value_t = String::from("openings.epd"))]
+    opening_file: String,
+
     #[arg(long, short, default_value_t = String::from("models/weights.msgpack"))]
     weights_file: String,
 
@@ -61,7 +64,7 @@ fn make_move(
     file: &mut Option<File>,
 ) -> bool {
     let mut total = 0;
-    match best_move::find_best_move(board, engine_nn, depth, tt_table, &mut total, true) {
+    match best_move::find_best_move(board, engine_nn, depth, tt_table, &mut total, true, None) {
         Some(best_move) => {
             record_to_file(file, board, Some(best_move));
             let _ = board.make_move(&best_move);
@@ -201,7 +204,7 @@ fn main() {
         );
     } else if args.gen_dataset {
         gen_dataset(
-            None,
+            Some(args.opening_file),
             None,
             args.data_size,
             args.depth as u8,
@@ -209,6 +212,6 @@ fn main() {
             args.weights_file,
         );
     } else {
-        uci::uci();
+        uci::uci(&args.weights_file);
     }
 }

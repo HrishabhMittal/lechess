@@ -85,8 +85,8 @@ fn parse_position(board: &mut Board, tokens: &[&str]) {
         }
     }
 }
-pub fn uci() {
-    let engine_nn = NeuralNet::load("models/weights.msgpack");
+pub fn uci(weights_path: &str) {
+    let engine_nn = NeuralNet::load(weights_path);
     let mut tt_table = TranspositionTable::new(256);
     let mut board = Board::new();
     let stdin = io::stdin();
@@ -109,18 +109,42 @@ pub fn uci() {
                 parse_position(&mut board, &tokens);
             }
             "go" => {
-                let depth: u32 = match tokens[1] {
-                    "depth" => tokens[2].parse::<u32>().unwrap_or(10),
-                    _ => 10,
-                };
+                let mut wtime = 0;
+                let mut btime = 0;
+                let mut winc = 0;
+                let mut binc = 0;
+                let mut depth_limit = 100;
+
+                let mut i = 1;
+                while i < tokens.len() {
+                    match tokens[i] {
+                        "wtime" => wtime = tokens[i + 1].parse().unwrap_or(0),
+                        "btime" => btime = tokens[i + 1].parse().unwrap_or(0),
+                        "winc" => winc = tokens[i + 1].parse().unwrap_or(0),
+                        "binc" => binc = tokens[i + 1].parse().unwrap_or(0),
+                        "depth" => depth_limit = tokens[i + 1].parse().unwrap_or(100),
+                        _ => {}
+                    }
+                    i += 1;
+                }
+
+                let mut time_limit = None;
+                if wtime > 0 || btime > 0 {
+                    let my_time = if board.white_to_move { wtime } else { btime };
+                    let my_inc = if board.white_to_move { winc } else { binc };
+
+                    time_limit = Some((my_time / 30) + (my_inc / 2));
+                }
+
                 let mut total = 0;
                 if let Some(best_move) = best_move::find_best_move(
                     &mut board,
                     &engine_nn,
-                    depth,
+                    depth_limit,
                     &mut tt_table,
                     &mut total,
                     true,
+                    time_limit,
                 ) {
                     println!("bestmove {}", move_to_uci(&best_move));
                 } else {

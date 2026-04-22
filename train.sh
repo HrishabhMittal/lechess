@@ -1,7 +1,7 @@
 #!/bin/bash
 
 GAMES_PER_GEN=500
-DEPTH=6
+DEPTH=4
 DATA_FILE="self_play_data.txt"
 WEIGHTS_FILE="models/weights.msgpack"
 GENERATION=1
@@ -11,8 +11,6 @@ cargo build --release
 while true; do
     
     echo gen $GENERATION
-
-    rm -f $DATA_FILE
 
     ./target/release/duchess \
         --gen-dataset \
@@ -36,5 +34,6 @@ while true; do
 
     python models/export.py
 
+    tail -n 500000 $DATA_FILE > temp_data.txt && mv temp_data.txt $DATA_FILE
     ((GENERATION++))
 done

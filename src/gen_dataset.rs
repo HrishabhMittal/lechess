@@ -4,7 +4,7 @@ use crate::nn::NeuralNet;
 use crate::tt::TranspositionTable;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 
 pub fn gen_dataset(
@@ -64,6 +64,7 @@ pub fn gen_dataset(
                         &mut tt,
                         &mut total_nodes,
                         false,
+                        None,
                     ) {
                         let mut score = 0;
                         if let Some(entry) = tt.probe(board.zobrist_hash) {

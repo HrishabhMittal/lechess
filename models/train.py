@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-import torch.multiprocessing
 import numpy as np
 class ChessNetRL(nn.Module):
     def __init__(self):
@@ -89,13 +88,18 @@ class RLDataset(Dataset):
 
     def __len__(self):
         return len(self.fens)
-
     def __getitem__(self, idx):
         fen_str = self.fens[idx]
+        is_white_turn = fen_str.split(' ')[1] == 'w'
         feature_array = fast_fen_to_halfkp(fen_str) 
         features_tensor = torch.tensor(feature_array, dtype=torch.float32)
-        
-        return features_tensor, self.search_scores[idx], self.game_results[idx]
+        score = self.search_scores[idx].clone()
+        result = self.game_results[idx].clone()
+        if not is_white_turn:
+            score = -score
+            result = 1.0 - result
+            
+        return features_tensor, score, result
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -108,10 +112,10 @@ if __name__ == "__main__":
         print("loaded previous weights")
     except:
         print("init with random weights")
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.00005)
     criterion = nn.MSELoss()
     LAMBDA = 0.5 
-    epochs = 15
+    epochs = 1
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0

@@ -82,7 +82,7 @@ fn pv(board: &mut Board, tt: &TranspositionTable, depth: u32) -> Vec<String> {
             if let Some(best_move) = entry.best_move {
                 pv.push(best_move);
                 out.push(move_to_uci(&best_move));
-                // out.push(board.move_to_san(&best_move));
+
                 undos.push(board.make_move(&best_move));
             } else {
                 break;
@@ -164,7 +164,7 @@ fn qs(
     *total += 1;
 
     let stand_pat = engine_nn.evaluate_from_acc(acc, board.white_to_move);
-    // let stand_pat = board.static_eval_color_neutral() * 100;
+
     if stand_pat >= beta {
         return beta;
     }
@@ -563,7 +563,6 @@ fn evaluate_position(
 
     max_val
 }
-
 pub fn find_best_move(
     board: &mut Board,
     engine_nn: &NeuralNet,
@@ -571,6 +570,7 @@ pub fn find_best_move(
     tt_table: &mut TranspositionTable,
     total: &mut u32,
     verbose: bool,
+    time_limit_ms: Option<u128>,
 ) -> Option<Move> {
     let moves = board.generate_legal_moves();
     if moves.is_empty() {
@@ -585,16 +585,20 @@ pub fn find_best_move(
     let lmr_table = build_lmr_table();
 
     let mut best_move = moves[0];
+    let mut completed_best_move = moves[0];
     let start_time = Instant::now();
 
     for cur_depth in 1..=depth {
         let mut max_val = -50000;
         let mut alpha = -50000;
         let beta = 50000;
+        let mut aborted = false;
+
         let mut tt_move: Option<Move> = None;
         if let Some(tt_entry) = tt_table.probe(board.zobrist_hash) {
             tt_move = tt_entry.best_move;
         }
+
         let mut scored_moves: Vec<(Move, i32)> = moves
             .iter()
             .map(|m| {
@@ -602,9 +606,17 @@ pub fn find_best_move(
                 (*m, score)
             })
             .collect();
+
         scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
 
         for (m, _) in scored_moves.iter() {
+            if let Some(limit) = time_limit_ms {
+                if start_time.elapsed().as_millis() > limit {
+                    aborted = true;
+                    break;
+                }
+            }
+
             let mut next_acc = acc;
             let undo = board.make_move(&m);
 
@@ -634,6 +646,12 @@ pub fn find_best_move(
             }
             board.unmake_move(&m, &undo);
         }
+        if aborted {
+            break;
+        }
+
+        completed_best_move = best_move;
+
         tt_table.store(
             board.zobrist_hash,
             cur_depth,
@@ -641,6 +659,7 @@ pub fn find_best_move(
             TTFlag::Exact,
             Some(best_move),
         );
+
         if verbose {
             let elapsed_ms = start_time.elapsed().as_millis().max(1);
             let nps = (*total as u128 * 1000) / elapsed_ms;
@@ -650,18 +669,13 @@ pub fn find_best_move(
                 format!("mate {}", moves_to_mate)
             } else if max_val < -9000 {
                 let moves_to_mate = (-10000 - max_val) / 2;
-                format!("mate {}", moves_to_mate)
+                format!("mate {}", -moves_to_mate)
             } else {
                 format!("cp {}", max_val)
             };
 
             let pv_moves = pv(board, tt_table, cur_depth);
-
-            let pv_string = pv_moves
-                .iter()
-                .map(|m| format!("{}", m))
-                .collect::<Vec<String>>()
-                .join(" ");
+            let pv_string = pv_moves.join(" ");
 
             println!(
                 "info depth {} score {} nodes {} nps {} time {} pv {}",
@@ -669,5 +683,5 @@ pub fn find_best_move(
             );
         }
     }
-    Some(best_move)
+    Some(completed_best_move)
 }
